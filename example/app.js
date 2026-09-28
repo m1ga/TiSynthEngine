@@ -1,0 +1,825 @@
+var Synth = require('ti.synthengine')
+
+var defaults = Synth.getDefaults()
+if (!defaults || defaults.apiVersion !== '1.0.0') {
+  throw new Error('TiSynthEngine 1.0.0 is required')
+}
+
+var WAVE = defaults.waveTypes
+var STEPPED_WAVE = [-1, -0.78, -0.16, 0.84, 1, 0.42, -0.2, -0.62]
+var engineRunning = false
+var startTimer = null
+var interactiveControls = []
+
+var COLORS = {
+  canvas: '#030712',
+  surface: '#111827',
+  surfaceRaised: '#1f2937',
+  surfaceMuted: '#374151',
+  text: '#ffffff',
+  textSecondary: '#9ca3af',
+  textMuted: '#6b7280',
+  green: '#16a34a',
+  greenPressed: '#15803d',
+  red: '#dc2626',
+  redDark: '#991b1b',
+  yellow: '#eab308',
+  yellowPressed: '#ca8a04',
+  blue: '#2563eb',
+  blueDark: '#1e40af',
+  indigo: '#4338ca',
+  indigoPressed: '#3730a3',
+  orange: '#c2410c',
+  orangePressed: '#9a3412',
+  teal: '#0f766e',
+  tealPressed: '#115e59',
+  pink: '#be185d',
+  pinkPressed: '#9d174d',
+  brown: '#78350f',
+  brownPressed: '#451a03'
+}
+
+function dp(value) {
+  return value + 'dp'
+}
+
+// ---------------------------------------------------------------------------
+// Window and reusable UI
+// ---------------------------------------------------------------------------
+
+var win = Ti.UI.createWindow({
+  backgroundColor: COLORS.canvas,
+  layout: 'vertical',
+  navBarHidden: true
+})
+
+var scrollOptions = {
+  layout: 'vertical',
+  contentWidth: Ti.UI.FILL,
+  contentHeight: Ti.UI.SIZE,
+  showVerticalScrollIndicator: false,
+  width: Ti.UI.FILL,
+  height: Ti.UI.FILL,
+  touchEnabled: false
+}
+if (Ti.Platform.osname === 'android') {
+  scrollOptions.scrollType = 'vertical'
+}
+
+var scrollView = Ti.UI.createScrollView(scrollOptions)
+
+function makeText(text, options) {
+  options = options || {}
+  return Ti.UI.createLabel({
+    text: text,
+    color: options.color || COLORS.text,
+    width: options.width || Ti.UI.FILL,
+    height: options.height || Ti.UI.SIZE,
+    textAlign: options.textAlign || Ti.UI.TEXT_ALIGNMENT_LEFT,
+    verticalAlign: options.verticalAlign,
+    includeFontPadding: options.includeFontPadding,
+    top: options.top,
+    right: options.right,
+    bottom: options.bottom,
+    left: options.left,
+    opacity: options.opacity === undefined ? 1 : options.opacity,
+    font: {
+      fontSize: options.fontSize || 14,
+      fontWeight: options.fontWeight || 'normal'
+    }
+  })
+}
+
+function makeBadge(text, backgroundColor) {
+  var badge = Ti.UI.createView({
+    backgroundColor: backgroundColor,
+    borderRadius: dp(12),
+    width: Ti.UI.SIZE,
+    height: dp(24),
+    right: dp(8)
+  })
+  badge.add(makeText(text, {
+    color: COLORS.text,
+    width: Ti.UI.SIZE,
+    left: dp(10),
+    right: dp(10),
+    fontSize: 11,
+    fontWeight: 'bold',
+    textAlign: Ti.UI.TEXT_ALIGNMENT_CENTER
+  }))
+  return badge
+}
+
+var statusDot = Ti.UI.createView({
+  backgroundColor: COLORS.yellow,
+  width: dp(8),
+  height: dp(8),
+  borderRadius: dp(4),
+  top: dp(12),
+  left: dp(12)
+})
+
+var statusLabel = makeText('Preparing audio after layout…', {
+  color: COLORS.textSecondary,
+  width: Ti.UI.SIZE,
+  height: Ti.UI.FILL,
+  left: dp(8),
+  right: dp(12),
+  fontSize: 12,
+  fontWeight: 'bold',
+  verticalAlign: Ti.UI.TEXT_VERTICAL_ALIGNMENT_CENTER,
+  includeFontPadding: false
+})
+
+var statusPill = Ti.UI.createView({
+  layout: 'horizontal',
+  backgroundColor: COLORS.surfaceRaised,
+  borderRadius: dp(16),
+  height: dp(32),
+  width: Ti.UI.SIZE,
+  top: dp(18)
+})
+statusPill.add(statusDot)
+statusPill.add(statusLabel)
+
+function setStatus(text, tone) {
+  statusLabel.text = text
+  statusDot.backgroundColor = tone || COLORS.green
+}
+
+function makeHero() {
+  var hero = Ti.UI.createView({
+    layout: 'vertical',
+    height: Ti.UI.SIZE,
+    left: dp(20),
+    right: dp(20),
+    top: Ti.Platform.osname === 'android' ? dp(30) : dp(20),
+    bottom: dp(8)
+  })
+
+  hero.add(makeText('NATIVE AUDIO PLAYGROUND', {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    fontWeight: 'bold',
+    textAlign: Ti.UI.TEXT_ALIGNMENT_CENTER
+  }))
+  hero.add(makeText('TiSynthEngine', {
+    top: dp(6),
+    fontSize: 30,
+    fontWeight: 'bold',
+    textAlign: Ti.UI.TEXT_ALIGNMENT_CENTER
+  }))
+  hero.add(makeText('Explore oscillators, wave shaping, harmony and sequencing with the public API.', {
+    top: dp(8),
+    color: COLORS.textSecondary,
+    fontSize: 14,
+    textAlign: Ti.UI.TEXT_ALIGNMENT_CENTER
+  }))
+
+  var badgeRow = Ti.UI.createView({
+    layout: 'horizontal',
+    width: Ti.UI.SIZE,
+    height: Ti.UI.SIZE,
+    top: dp(16)
+  })
+  badgeRow.add(makeBadge('API 1.0.0', COLORS.indigo))
+  badgeRow.add(makeBadge('ANDROID + iOS', COLORS.surfaceMuted))
+  hero.add(badgeRow)
+  hero.add(statusPill)
+
+  return hero
+}
+
+function makeSection(title, description, accentColor) {
+  var section = Ti.UI.createView({
+    layout: 'vertical',
+    height: Ti.UI.SIZE,
+    left: dp(16),
+    right: dp(16),
+    top: dp(20),
+    backgroundColor: COLORS.surface,
+    borderRadius: dp(12)
+  })
+
+  section.add(Ti.UI.createView({
+    height: dp(4),
+    left: 0,
+    right: 0,
+    top: 0,
+    backgroundColor: accentColor
+  }))
+  section.add(makeText(title.toUpperCase(), {
+    top: dp(16),
+    left: dp(16),
+    right: dp(16),
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: 'bold'
+  }))
+  section.add(makeText(description, {
+    top: dp(5),
+    left: dp(16),
+    right: dp(16),
+    bottom: dp(4),
+    color: COLORS.text,
+    fontSize: 16,
+    fontWeight: 'bold'
+  }))
+
+  return section
+}
+
+function makeRow() {
+  return Ti.UI.createView({
+    layout: 'horizontal',
+    width: Ti.UI.FILL,
+    height: Ti.UI.SIZE
+  })
+}
+
+function makeAction(options) {
+  var action = Ti.UI.createView({
+    backgroundColor: options.color,
+    borderRadius: dp(options.radius || 8),
+    width: options.width || Ti.UI.FILL,
+    height: dp(options.height || 52),
+    top: dp(options.top === undefined ? 6 : options.top),
+    right: options.right === undefined ? dp(16) : options.right,
+    bottom: options.bottom,
+    left: options.left === undefined ? dp(16) : options.left,
+    opacity: 0.58,
+    touchEnabled: false,
+    bubbleParent: false,
+    accessibilityLabel: options.accessibilityLabel || options.title,
+    accessibilityHint: options.accessibilityHint || 'Plays this sound demonstration'
+  })
+
+  var label = makeText(options.title, {
+    color: options.textColor || COLORS.text,
+    left: dp(8),
+    right: dp(8),
+    fontSize: options.fontSize || 13,
+    fontWeight: 'bold',
+    textAlign: Ti.UI.TEXT_ALIGNMENT_CENTER
+  })
+  label.accessibilityHidden = true
+  action.add(label)
+
+  function restoreColor() {
+    action.backgroundColor = options.color
+    action.opacity = engineRunning ? 1 : 0.58
+  }
+
+  action.addEventListener('touchstart', function () {
+    if (!engineRunning) return
+    action.backgroundColor = options.pressedColor || COLORS.surfaceMuted
+    action.opacity = 0.9
+  })
+  action.addEventListener('touchend', restoreColor)
+  action.addEventListener('touchcancel', restoreColor)
+  action.addEventListener('click', function () {
+    if (!engineRunning) return
+    restoreColor()
+    setStatus(options.status || ('Playing ' + options.title), options.statusColor || options.color)
+    var accepted = options.onPress()
+    if (accepted === false) {
+      setStatus('Request rejected · inspect the native log', COLORS.red)
+    }
+  })
+
+  interactiveControls.push(action)
+  return action
+}
+
+function makeGridAction(options) {
+  options.width = '46%'
+  options.left = '2%'
+  options.right = '2%'
+  return makeAction(options)
+}
+
+function makeCompactAction(options) {
+  options.width = '29%'
+  options.left = '2%'
+  options.right = '2%'
+  options.height = 48
+  return makeAction(options)
+}
+
+function playMatchedSine(note) {
+  Synth.playTone({
+    note: note,
+    duration: 600,
+    attack: 10,
+    release: 80,
+    volume: 0.7,
+    waveType: WAVE.SINE
+  })
+}
+
+function playMatchedArpeggio(pitchKey, pitches) {
+  Synth.playPattern({
+    attack: 5,
+    release: 30,
+    volume: 0.7,
+    waveType: WAVE.SQUARE,
+    steps: pitches.map(function (pitch) {
+      var step = { duration: 140 }
+      step[pitchKey] = pitch
+      return step
+    })
+  })
+}
+
+scrollView.add(makeHero())
+
+// ---------------------------------------------------------------------------
+// 1. Waveform demos
+// ---------------------------------------------------------------------------
+
+var waveSection = makeSection(
+  'Waveforms · 440 Hz',
+  'Same 70% gain; harmonics still change perceived loudness.',
+  COLORS.indigo
+)
+var waveNames = ['Sine', 'Square', 'Sawtooth', 'Triangle', 'Noise', 'Wavetable']
+var waveTypes = [WAVE.SINE, WAVE.SQUARE, WAVE.SAWTOOTH, WAVE.TRIANGLE, WAVE.NOISE, WAVE.WAVETABLE]
+var waveStyles = [
+  { color: COLORS.green, pressed: COLORS.greenPressed },
+  { color: COLORS.blue, pressed: COLORS.blueDark },
+  { color: COLORS.orange, pressed: COLORS.orangePressed },
+  { color: COLORS.indigo, pressed: COLORS.indigoPressed },
+  { color: COLORS.surfaceMuted, pressed: COLORS.surfaceRaised },
+  { color: COLORS.teal, pressed: COLORS.tealPressed }
+]
+
+var waveRow = null
+waveNames.forEach(function (name, index) {
+  if (index % 2 === 0) {
+    waveRow = makeRow()
+    waveSection.add(waveRow)
+  }
+  waveRow.add(makeGridAction({
+    title: name === 'Noise' ? 'Noise\nUnpitched' : name + '\n440 Hz',
+    color: waveStyles[index].color,
+    pressedColor: waveStyles[index].pressed,
+    status: name === 'Noise' ? 'Noise · unpitched' : name + ' · 440 Hz',
+    onPress: function () {
+      var options = {
+        frequency: 440,
+        duration: 600,
+        attack: 10,
+        release: 80,
+        volume: 0.7,
+        waveType: waveTypes[index]
+      }
+      if (waveTypes[index] === WAVE.WAVETABLE) options.waveTable = STEPPED_WAVE
+      Synth.playTone(options)
+    }
+  }))
+})
+waveSection.add(Ti.UI.createView({ height: dp(12) }))
+scrollView.add(waveSection)
+
+// ---------------------------------------------------------------------------
+// 2. Note names
+// ---------------------------------------------------------------------------
+
+var noteSection = makeSection(
+  'Note names · matched A/B',
+  'Same sine, envelope and gain as above. A4 and La4 resolve to 440 Hz.',
+  COLORS.green
+)
+var noteDemos = [
+  { note: 'A4', frequency: '440 Hz' },
+  { note: 'La4', frequency: '440 Hz' },
+  { note: 'C4', frequency: '261.63 Hz' },
+  { note: 'Do4', frequency: '261.63 Hz' },
+  { note: 'F#4', frequency: '369.99 Hz' },
+  { note: 'Fa#4', frequency: '369.99 Hz' },
+  { note: 'Bb3', frequency: '233.08 Hz' },
+  { note: 'Sib3', frequency: '233.08 Hz' }
+]
+var noteRow = null
+noteDemos.forEach(function (demo, index) {
+  if (index % 2 === 0) {
+    noteRow = makeRow()
+    noteSection.add(noteRow)
+  }
+  noteRow.add(makeGridAction({
+    title: demo.note + '\n' + demo.frequency,
+    color: COLORS.surfaceMuted,
+    pressedColor: COLORS.surfaceRaised,
+    status: 'Note ' + demo.note + ' · sine at 70%',
+    onPress: function () {
+      playMatchedSine(demo.note)
+    }
+  }))
+})
+noteSection.add(Ti.UI.createView({ height: dp(12) }))
+scrollView.add(noteSection)
+
+// ---------------------------------------------------------------------------
+// 3. Motion and modulation
+// ---------------------------------------------------------------------------
+
+var motionSection = makeSection(
+  'Motion and modulation',
+  'Move a sound through stereo space, pitch and vibrato.',
+  COLORS.pink
+)
+motionSection.add(makeAction({
+  title: 'PAN SWEEP\nLeft → Right · 2 seconds',
+  color: COLORS.teal,
+  pressedColor: COLORS.tealPressed,
+  status: 'Pan sweep · left to right',
+  onPress: function () {
+    Synth.playTone({
+      frequency: 440,
+      duration: 2000,
+      attack: 20,
+      release: 200,
+      volume: 0.8,
+      pan: -1.0,
+      panEnd: 1.0
+    })
+  }
+}))
+motionSection.add(makeAction({
+  title: 'PITCH SWEEP\n200 → 900 Hz · sawtooth',
+  color: COLORS.pink,
+  pressedColor: COLORS.pinkPressed,
+  status: 'Pitch sweep · 200 to 900 Hz',
+  onPress: function () {
+    Synth.playTone({
+      frequency: 200,
+      frequencyEnd: 900,
+      duration: 400,
+      attack: 5,
+      release: 40,
+      volume: 0.7,
+      waveType: WAVE.SAWTOOTH
+    })
+  }
+}))
+motionSection.add(makeAction({
+  title: 'LFO VIBRATO\n5 Hz · depth 30',
+  color: COLORS.orange,
+  pressedColor: COLORS.orangePressed,
+  status: 'LFO vibrato · 5 Hz',
+  onPress: function () {
+    Synth.playTone({
+      frequency: 440,
+      duration: 2000,
+      attack: 20,
+      release: 200,
+      volume: 0.7,
+      lfoFreq: 5,
+      lfoDepth: 30
+    })
+  }
+}))
+motionSection.add(Ti.UI.createView({ height: dp(16) }))
+scrollView.add(motionSection)
+
+// ---------------------------------------------------------------------------
+// 4. Wave shaping
+// ---------------------------------------------------------------------------
+
+var retroSection = makeSection(
+  'Wave shaping',
+  'Hear variable-rate sample-and-hold noise, low-pass filtering, variable pulse width, a custom wavetable and 8-bit quantization.',
+  COLORS.orange
+)
+retroSection.add(makeAction({
+  title: 'FILTERED NOISE DECAY\n12 kHz → 650 Hz · 8-bit',
+  color: COLORS.brown,
+  pressedColor: COLORS.brownPressed,
+  status: 'Filtered sample-and-hold noise sweep',
+  onPress: function () {
+    Synth.playTone({
+      frequency: 120,
+      duration: 760,
+      attack: 1,
+      release: 580,
+      volume: 0.68,
+      waveType: WAVE.NOISE,
+      noiseRate: 12000,
+      noiseRateEnd: 650,
+      lowPassHz: 2500,
+      bitDepth: 8
+    })
+  }
+}))
+retroSection.add(makeAction({
+  title: 'PULSE-WIDTH SWEEP\n10% → 86% · A3',
+  color: COLORS.orange,
+  pressedColor: COLORS.orangePressed,
+  status: 'Square pulse-width sweep',
+  onPress: function () {
+    Synth.playTone({
+      note: 'A3',
+      duration: 700,
+      attack: 3,
+      release: 180,
+      volume: 0.58,
+      waveType: WAVE.SQUARE,
+      pulseWidth: 0.1,
+      pulseWidthEnd: 0.86
+    })
+  }
+}))
+retroSection.add(makeAction({
+  title: 'STEPPED WAVETABLE\n8 samples · D4 · 8-bit',
+  color: COLORS.teal,
+  pressedColor: COLORS.tealPressed,
+  status: 'Custom stepped wavetable',
+  onPress: function () {
+    Synth.playTone({
+      note: 'D4',
+      duration: 680,
+      attack: 4,
+      release: 220,
+      volume: 0.6,
+      waveType: WAVE.WAVETABLE,
+      waveTable: STEPPED_WAVE,
+      bitDepth: 8
+    })
+  }
+}))
+retroSection.add(makeAction({
+  title: 'SHAPING PATTERN\nNoise → pulse → wavetable',
+  color: COLORS.indigo,
+  pressedColor: COLORS.indigoPressed,
+  status: 'Pattern-level shaping with per-step overrides',
+  onPress: function () {
+    return Synth.playPattern({
+      stepDuration: 210,
+      attack: 2,
+      release: 80,
+      volume: 0.48,
+      waveType: WAVE.NOISE,
+      noiseRate: 12000,
+      lowPassHz: 2600,
+      bitDepth: 8,
+      steps: [
+        { frequency: 120, duration: 180, release: 150, noiseRateEnd: 800 },
+        { rest: true, duration: 100 },
+        {
+          note: 'A3',
+          duration: 300,
+          release: 120,
+          waveType: WAVE.SQUARE,
+          pulseWidth: 0.1,
+          pulseWidthEnd: 0.82,
+          lowPassHz: 0,
+          bitDepth: 0
+        },
+        {
+          note: 'D4',
+          duration: 360,
+          release: 160,
+          waveType: WAVE.WAVETABLE,
+          waveTable: STEPPED_WAVE
+        }
+      ]
+    })
+  }
+}))
+retroSection.add(Ti.UI.createView({ height: dp(16) }))
+scrollView.add(retroSection)
+
+// ---------------------------------------------------------------------------
+// 5. Harmony
+// ---------------------------------------------------------------------------
+
+var harmonySection = makeSection(
+  'Harmony',
+  'Atomic chords keep every voice aligned at the same onset.',
+  COLORS.blue
+)
+harmonySection.add(makeAction({
+  title: 'C MAJOR TRIAD\nSine · automatic stereo spread',
+  color: COLORS.blueDark,
+  pressedColor: COLORS.blue,
+  status: 'C major triad · sine',
+  onPress: function () {
+    Synth.playChord({
+      frequencies: [261.63, 329.63, 392.0],
+      duration: 1200,
+      attack: 20,
+      release: 300,
+      volume: 0.7,
+      panSpread: 0.8
+    })
+  }
+}))
+harmonySection.add(makeAction({
+  title: 'C MAJOR · WIDE\nSquare · per-voice pans',
+  color: COLORS.indigo,
+  pressedColor: COLORS.indigoPressed,
+  status: 'C major chord · square and wide',
+  onPress: function () {
+    Synth.playChord({
+      notes: ['C4', 'E4', 'G4', 'C5'],
+      duration: 1000,
+      attack: 10,
+      release: 200,
+      volume: 0.6,
+      waveType: WAVE.SQUARE,
+      pans: [-0.9, -0.3, 0.3, 0.9]
+    })
+  }
+}))
+harmonySection.add(Ti.UI.createView({ height: dp(16) }))
+scrollView.add(harmonySection)
+
+// ---------------------------------------------------------------------------
+// 6. Sequencing
+// ---------------------------------------------------------------------------
+
+var sequenceSection = makeSection(
+  'Native sequencing',
+  'The first two demos are matched A/B tests; only the pitch input format changes.',
+  COLORS.yellow
+)
+sequenceSection.add(makeAction({
+  title: 'ARPEGGIO A/B · FREQUENCIES\nC major · square · 70% gain',
+  color: COLORS.green,
+  pressedColor: COLORS.greenPressed,
+  status: 'Matched arpeggio · frequencies',
+  onPress: function () {
+    playMatchedArpeggio('frequency', [261.63, 329.63, 392.0, 523.25, 392.0, 329.63])
+  }
+}))
+sequenceSection.add(makeAction({
+  title: 'ARPEGGIO A/B · NOTE NAMES\nC4 · E4 · G4 · C5 · G4 · E4',
+  color: COLORS.green,
+  pressedColor: COLORS.greenPressed,
+  status: 'Matched arpeggio · note names',
+  onPress: function () {
+    playMatchedArpeggio('note', ['C4', 'E4', 'G4', 'C5', 'G4', 'E4'])
+  }
+}))
+sequenceSection.add(makeAction({
+  title: 'MELODY PATTERN\n140 BPM · swing 0.1',
+  color: COLORS.yellow,
+  pressedColor: COLORS.yellowPressed,
+  textColor: COLORS.canvas,
+  status: 'Melody pattern · 140 BPM',
+  onPress: function () {
+    Synth.playPattern({
+      bpm: 140,
+      swing: 0.1,
+      steps: [
+        { note: 'C4', noteValue: '8n', volume: 0.8, waveType: WAVE.SQUARE },
+        { note: 'E4', noteValue: '8n', volume: 0.7, waveType: WAVE.SQUARE },
+        { note: 'G4', noteValue: '8n', volume: 0.7, waveType: WAVE.SQUARE },
+        { note: 'C5', noteValue: '4n', volume: 0.9, waveType: WAVE.SQUARE },
+        { rest: true, noteValue: '8n' },
+        { note: 'Bb3', noteValue: '8n', volume: 0.7, waveType: WAVE.SQUARE },
+        { note: 'G3', noteValue: '4n', volume: 0.8, waveType: WAVE.SQUARE }
+      ]
+    })
+  }
+}))
+sequenceSection.add(makeAction({
+  title: 'NOISE PERCUSSION\n120 BPM · eighths and sixteenths',
+  color: COLORS.brown,
+  pressedColor: COLORS.brownPressed,
+  status: 'Noise percussion · 120 BPM',
+  onPress: function () {
+    Synth.playPattern({
+      bpm: 120,
+      steps: [
+        { frequency: 80, noteValue: '8n', volume: 0.9, waveType: WAVE.NOISE, attack: 2, release: 60 },
+        { rest: true, noteValue: '8n' },
+        { frequency: 80, noteValue: '8n', volume: 0.7, waveType: WAVE.NOISE, attack: 2, release: 40 },
+        { rest: true, noteValue: '8n' },
+        { frequency: 80, noteValue: '8n', volume: 0.9, waveType: WAVE.NOISE, attack: 2, release: 60 },
+        { rest: true, noteValue: '8n' },
+        { frequency: 80, noteValue: '16n', volume: 0.7, waveType: WAVE.NOISE, attack: 2, release: 30 },
+        { frequency: 80, noteValue: '16n', volume: 0.7, waveType: WAVE.NOISE, attack: 2, release: 30 }
+      ]
+    })
+  }
+}))
+sequenceSection.add(Ti.UI.createView({ height: dp(16) }))
+scrollView.add(sequenceSection)
+
+// ---------------------------------------------------------------------------
+// 7. Output controls
+// ---------------------------------------------------------------------------
+
+var controlSection = makeSection(
+  'Output',
+  'Set the master gain or stop every active voice.',
+  COLORS.red
+)
+var volumeRow = makeRow()
+var volumeValues = [0.2, 0.5, 1.0]
+volumeValues.forEach(function (volume) {
+  volumeRow.add(makeCompactAction({
+    title: Math.round(volume * 100) + '%',
+    color: volume === 1.0 ? COLORS.blueDark : COLORS.surfaceMuted,
+    pressedColor: volume === 1.0 ? COLORS.blue : COLORS.surfaceRaised,
+    status: 'Master volume · ' + Math.round(volume * 100) + '%',
+    accessibilityLabel: 'Set master volume to ' + Math.round(volume * 100) + ' percent',
+    onPress: function () {
+      Synth.setVolume({ volume: volume })
+    }
+  }))
+})
+controlSection.add(volumeRow)
+
+var boostRow = makeRow()
+boostRow.add(makeGridAction({
+  title: 'BOOST\n150%',
+  color: COLORS.orange,
+  pressedColor: COLORS.orangePressed,
+  status: 'Master volume · 150%',
+  accessibilityLabel: 'Set master volume to 150 percent',
+  onPress: function () {
+    Synth.setVolume({ volume: 1.5 })
+  }
+}))
+boostRow.add(makeGridAction({
+  title: 'STOP ALL\nRelease active voices',
+  color: COLORS.redDark,
+  pressedColor: COLORS.red,
+  status: 'All voices stopped',
+  accessibilityHint: 'Stops every active voice',
+  onPress: function () {
+    Synth.stopAll()
+  }
+}))
+controlSection.add(boostRow)
+controlSection.add(Ti.UI.createView({ height: dp(12) }))
+scrollView.add(controlSection)
+
+scrollView.add(makeText('Built with the same public API on Android and iOS.', {
+  top: dp(24),
+  bottom: dp(32),
+  color: COLORS.textMuted,
+  fontSize: 12,
+  textAlign: Ti.UI.TEXT_ALIGNMENT_CENTER
+}))
+
+win.add(scrollView)
+
+// ---------------------------------------------------------------------------
+// Engine lifecycle
+// ---------------------------------------------------------------------------
+
+function startAppCycles() {
+  startTimer = null
+  win.removeEventListener('postlayout', onFirstPostLayout)
+  if (Synth.startEngine({ maxVoices: 16, mixingProfile: 'conservative' }) === false) {
+    setStatus('Engine start failed', COLORS.red)
+    throw new Error('TiSynthEngine rejected the engine configuration')
+  }
+
+  engineRunning = true
+  scrollView.touchEnabled = true
+  interactiveControls.forEach(function (control) {
+    control.applyProperties({ opacity: 1, touchEnabled: true })
+  })
+  setStatus('Audio ready · tap a demo', COLORS.green)
+  Ti.API.info('TiSynthEngine: example started after first postlayout')
+}
+
+function onFirstPostLayout() {
+  if (startTimer !== null) clearTimeout(startTimer)
+  startTimer = setTimeout(startAppCycles, 250)
+}
+
+function hideAndroidActionBar() {
+  if (Ti.Platform.osname !== 'android') return
+
+  var activity = win.activity || Ti.Android.currentActivity
+  if (activity && activity.actionBar) activity.actionBar.hide()
+}
+
+function cleanup() {
+  win.removeEventListener('postlayout', onFirstPostLayout)
+  win.removeEventListener('open', hideAndroidActionBar)
+  win.removeEventListener('focus', hideAndroidActionBar)
+  win.removeEventListener('close', cleanup)
+
+  if (startTimer !== null) {
+    clearTimeout(startTimer)
+    startTimer = null
+  }
+  if (engineRunning) {
+    Synth.shutdown()
+    engineRunning = false
+  }
+}
+
+win.addEventListener('postlayout', onFirstPostLayout)
+if (Ti.Platform.osname === 'android') {
+  win.addEventListener('open', hideAndroidActionBar)
+  win.addEventListener('focus', hideAndroidActionBar)
+}
+win.addEventListener('close', cleanup)
+win.open()

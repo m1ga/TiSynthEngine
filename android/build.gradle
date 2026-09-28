@@ -1,0 +1,44 @@
+
+dependencies {
+	implementation "com.google.oboe:oboe:1.10.0"
+}
+
+android {
+	buildFeatures {
+		prefab = true
+	}
+	defaultConfig {
+		aarMetadata {
+			// The renderer only uses APIs available to Titanium 13.3.1 projects.
+			// Keep consumers on the documented API 35 compatibility floor even
+			// when this module is built locally with a newer Android SDK.
+			minCompileSdk = 35
+		}
+		externalNativeBuild {
+			ndkBuild {
+				arguments 'APP_STL=c++_shared'
+			}
+		}
+	}
+}
+
+// Titanium generates Android.mk inside build/. Extend that generated makefile
+// just before native configuration so the module and the Oboe renderer share a
+// single .so and the generated Kroll bindings remain intact.
+preBuild.doFirst {
+	def makefile = file("${projectDir}/src/main/jni/Android.mk")
+	if (!makefile.exists()) {
+		throw new GradleException("Titanium did not generate ${makefile}")
+	}
+	def source = makefile.getText('UTF-8')
+	def generatedSources = '$(wildcard $(LOCAL_PATH)/../../../build/ti-generated/jni/*.cpp)'
+	def nativeSources = generatedSources + ' \\\n\t$(wildcard $(LOCAL_PATH)/../../../../../jni/*.cpp)'
+	if (!source.contains('android/jni') && !source.contains('../../../../../jni/*.cpp')) {
+		source = source.replace(generatedSources, nativeSources)
+	}
+	if (!source.contains('LOCAL_SHARED_LIBRARIES := oboe')) {
+		source = source.replace('include $(BUILD_SHARED_LIBRARY)',
+			'LOCAL_SHARED_LIBRARIES := oboe\n\ninclude $(BUILD_SHARED_LIBRARY)\n\n$(call import-module,prefab/oboe)')
+	}
+	makefile.write(source, 'UTF-8')
+}

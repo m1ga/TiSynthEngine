@@ -1,0 +1,92 @@
+# Titanium SDK Multiplatform Module .gitignore (Optimized)
+
+# === Node.js ===
+node_modules/
+npm-debug.log*
+
+# === macOS & System files ===
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+
+# === Build, temp, and backup files ===
+build/
+bin/
+*.pyc
+*.pyo
+*.swp
+*.swo
+*.tmp
+*.log
+*~
+*.bak
+*.orig
+
+# === Android ===
+android/build/
+android/local.properties
+android/.gradle/
+android/.idea/
+android/.DS_Store
+android/.cxx/
+android/.externalNativeBuild/
+android/.settings/
+android/.project
+android/.classpath
+android/.factorypath
+android/.metadata/
+android/.recommenders/
+android/.gradletasknamecache
+
+# === iOS ===
+ios/build/
+ios/DerivedData/
+ios/Classes/*.xcuserstate
+ios/Classes/*.xcworkspace
+ios/Classes/*.xcuserdata
+ios/Classes/*.moved-aside
+ios/Classes/*.xcuserdatad
+ios/Classes/*.xcscmblueprint
+ios/Classes/*.xcsettings
+
+# === Xcode & Apple build artifacts ===
+*.xcuserstate
+*.xcworkspace
+*.xcuserdata
+*.moved-aside
+*.xcuserdatad
+*.xcscmblueprint
+*.xcsettings
+*.a
+*.xcframework/
+*.xcarchive/
+
+# === Release/package artifacts: attached to GitHub releases, not tracked ===
+android/dist/
+ios/dist/
+
+# === IDE & AI/Assistant config files ===
+.idea/
+.vscode/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.claude/
+.cursor/
+
+# === Add any other patterns specific to your workflow below ===
+
+# Local screen recordings used to review audio behavior
+*.mp4
+
+# Local screenshots dropped at the repository root
+/*.png
+/*.jpg
+/*.jpeg
+/screen-capture*
+/Captura*
+
+# Local session notes, never published
+/docs/project/
