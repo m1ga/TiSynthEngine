@@ -5,7 +5,8 @@ the native audio resources when the owning screen closes.
 
 ## Install the module
 
-Use the archive for each target platform:
+Download the archive for each target platform from the
+[latest release](https://github.com/macCesar/TiSynthEngine/releases/latest):
 
 - `ti.synthengine-android-1.0.0.zip`
 - `ti.synthengine-iphone-1.0.0.zip`
@@ -20,7 +21,7 @@ Titanium CLI. Pin the same version for both platforms:
 </modules>
 ```
 
-TiSynthEngine requires Titanium SDK 13.3.1.GA or newer. Android projects must
+TiSynthEngine requires Titanium SDK 13.2.0.GA or newer. Android projects must
 compile against API 35 or newer. The iOS module requires iOS 15 or newer.
 
 ## Load and verify the contract

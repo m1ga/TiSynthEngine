@@ -12,7 +12,7 @@ It is a synthesizer, not a sample player. It does not decode `.wav` or `.mp3` fi
 
 ## Requirements
 
-- Titanium SDK 13.3.1.GA or newer.
+- Titanium SDK 13.2.0.GA or newer.
 - Android projects must compile against API 35 or newer.
 - Android: `arm64-v8a`, `armeabi-v7a`, `x86` or `x86_64`.
 - iOS 15.0 or newer.
@@ -20,10 +20,10 @@ It is a synthesizer, not a sample player. It does not decode `.wav` or `.mp3` fi
 
 ## Install
 
-Copy these archives into the root of the Titanium app:
+Download both archives from the [latest release](https://github.com/macCesar/TiSynthEngine/releases/latest) and copy them into the root of the Titanium app:
 
-- `android/dist/ti.synthengine-android-1.0.0.zip`
-- `ios/dist/ti.synthengine-iphone-1.0.0.zip`
+- `ti.synthengine-android-1.0.0.zip`
+- `ti.synthengine-iphone-1.0.0.zip`
 
 Declare both platform modules in `tiapp.xml`:
 
@@ -343,4 +343,4 @@ The [Android notes](android/README.md), [iOS notes](ios/README.md) and [audio en
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). The Android module bundles Oboe under the Apache License 2.0; see [third-party notices](documentation/third-party-notices.md).

@@ -16,6 +16,7 @@ It covers the lifecycle, the eight public methods and the most common options.
 - [Audio engine](audio-engine.md): signal path, mixing and platform details.
 - [Recommendations](recommendations.md): gain staging, lifecycle and testing.
 - [Troubleshooting](troubleshooting.md): rejected calls, silence and glitches.
+- [Third-party notices](third-party-notices.md): licenses of bundled dependencies.
 
 The runnable Titanium app is in [`example/app.js`](../example/app.js). Host-side
 contract and DSP regressions are in [`tests/`](../tests/) and
