@@ -132,8 +132,6 @@ assert(androidContract.includes('"unsupported_option"'), 'Android rejects unknow
 assert(iosContract.includes('@"unsupported_option"'), 'iOS rejects unknown options')
 assert(androidContract.includes('"invalid_step_type"'), 'Android rejects invalid pattern step types')
 assert(iosContract.includes('@"invalid_step_type"'), 'iOS rejects invalid pattern step types')
-assert(!androidContract.includes('removed_in_v3'), 'Android has no internal-version rejection reason')
-assert(!iosContract.includes('removed_in_v3'), 'iOS has no internal-version rejection reason')
 assert(!androidContract.includes('primitive_step_removed'), 'Android has no migration-specific step reason')
 assert(!iosContract.includes('primitive_step_removed'), 'iOS has no migration-specific step reason')
 

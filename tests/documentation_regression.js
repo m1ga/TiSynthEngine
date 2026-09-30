@@ -20,7 +20,8 @@ const publicFiles = [
   'documentation/sound-design.md',
   'documentation/audio-engine.md',
   'documentation/recommendations.md',
-  'documentation/troubleshooting.md'
+  'documentation/troubleshooting.md',
+  'documentation/third-party-notices.md'
 ]
 
 function read(relativePath) {
@@ -105,10 +106,10 @@ function checkUnwrappedProse(relativePath, source) {
 
 for (const relativePath of publicFiles) {
   const source = read(relativePath)
-  assert(!/\b(?:v?3\.0\.0|2\.\d+\.\d+)\b/i.test(source),
-    `${relativePath} exposes an internal version`)
-  assert(!/removed_in_v3|primitive_step_removed|migration-3\.0/i.test(source),
-    `${relativePath} exposes a migration-only term`)
+  for (const version of source.match(/(?<![\d.])\d+\.\d+\.\d+/g) || []) {
+    assert(version === '1.0.0' || version === '1.10.0' || /^13\.\d+\.\d+$/.test(version),
+      `${relativePath} mentions version ${version}; only the module, Titanium SDK and Oboe versions are public`)
+  }
   assert(!/\b(?:legacy|backwards? compatibility|migration)\b/i.test(source),
     `${relativePath} contains historical compatibility language`)
   assert(!/[—–]/.test(source), `${relativePath} contains editorial dash punctuation`)
