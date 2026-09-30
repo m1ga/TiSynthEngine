@@ -1,6 +1,6 @@
 # TiSynthEngine iOS module
 
-This folder contains the iOS implementation of `ti.synthengine` 1.1.0. The
+This folder contains the iOS implementation of `ti.synthengine` 1.0.0. The
 public API is documented in the root [README](../README.md) and the
 [API reference](../documentation/api.md).
 
@@ -23,8 +23,8 @@ The native engine provides:
 - `conservative`, `balanced`, `speakerSafe` and `raw` mixing profiles.
 
 The module targets iOS 15 or newer. Release builds use Titanium SDK
-13.3.1.GA, which is also the minimum declared by the module manifest.
+13.2.0.GA, which is also the minimum declared by the module manifest.
 The archive supports device, simulator and Mac Catalyst builds.
 
 Build the distributable module with the Titanium CLI from `ios/`. The expected
-archive is `dist/ti.synthengine-iphone-1.1.0.zip`.
+archive is `dist/ti.synthengine-iphone-1.0.0.zip`.

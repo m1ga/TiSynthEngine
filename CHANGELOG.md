@@ -31,4 +31,4 @@ First public release.
   validated against each step's inherited timing.
 - Host-side contract, parity and DSP regressions, an interactive example app,
   and complete API and sound-design documentation.
-- Requires Titanium SDK 13.3.1.GA or newer and iOS 15 or newer.
+- Requires Titanium SDK 13.2.0.GA or newer and iOS 15 or newer.

@@ -1,6 +1,6 @@
 # TiSynthEngine Android module
 
-This folder contains the Android implementation of `ti.synthengine` 1.1.0. The
+This folder contains the Android implementation of `ti.synthengine` 1.0.0. The
 public API is documented in the root [README](../README.md) and the
 [API reference](../documentation/api.md).
 
@@ -26,7 +26,7 @@ The native engine provides:
 `build.gradle` resolves Oboe 1.10.0 through Prefab and extends Titanium's
 generated `Android.mk`. Supported ABIs are `arm64-v8a`, `armeabi-v7a`, `x86`
 and `x86_64`. The packaged AAR keeps API 35 as its minimum compile SDK so it
-remains consumable by Titanium 13.3.1 projects.
+remains consumable by Titanium 13.2.0 projects.
 
 `src/ti/synthengine/SynthDsp.java` is the host-testable mixing and limiter
 reference. The complete runtime renderer is implemented in
@@ -48,4 +48,4 @@ java -cp "$test_dir" ti.synthengine.SynthDspRegression
 ```
 
 Build the distributable module with the Titanium CLI from `android/`. The
-expected archive is `dist/ti.synthengine-android-1.1.0.zip`.
+expected archive is `dist/ti.synthengine-android-1.0.0.zip`.

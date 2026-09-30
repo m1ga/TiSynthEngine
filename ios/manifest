@@ -16,4 +16,4 @@ name: TiSynthEngine
 moduleid: ti.synthengine
 guid: ee6624e0-d373-4cf9-8849-a1f034594518
 platform: iphone
-minsdk: 13.3.1.GA
+minsdk: 13.2.0.GA

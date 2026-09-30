@@ -9,7 +9,7 @@ android {
 	}
 	defaultConfig {
 		aarMetadata {
-			// The renderer only uses APIs available to Titanium 13.3.1 projects.
+			// The renderer only uses APIs available to Titanium 13.2.0 projects.
 			// Keep consumers on the documented API 35 compatibility floor even
 			// when this module is built locally with a newer Android SDK.
 			minCompileSdk = 35
