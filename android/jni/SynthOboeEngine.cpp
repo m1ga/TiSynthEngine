@@ -12,11 +12,16 @@
 #include <thread>
 #include <vector>
 
+#include "../../shared/synth_core.h"
+
 namespace {
 constexpr int kMaxVoices = 32;
 constexpr int kMaxSteps = 32;
 constexpr int kMaxWavetableSamples = 64;
 constexpr int kQueueCapacity = 128;
+// Mirrors SynthThread.EXTRA_*: decay ms, sustain, filter type, cutoff, cutoff
+// end, Q, FM ratio, FM depth, FM depth end (NaN = no sweep).
+constexpr int kExtraCount = 9;
 constexpr double kPi = 3.14159265358979323846;
 
 template <typename T> T clampValue(T value, T low, T high) {
@@ -105,6 +110,12 @@ struct Command {
   std::array<double, kMaxWavetableSamples> wavetable{};
   std::array<double, kMaxSteps> steps{};
   int stepCount = 0, stepDurationMs = 100;
+  int decay = 0;
+  double sustain = 1.0;
+  int filterType = SYNTH_FILTER_NONE;
+  double filterHz = 1000.0, filterHzEnd = 0.0, filterQ = 0.7071;
+  double fmRatio = 1.0, fmDepth = 0.0, fmDepthEnd = 0.0;
+  bool fmDepthSweep = false;
 };
 
 struct Voice {
@@ -123,6 +134,12 @@ struct Voice {
   std::array<double, kMaxSteps> steps{};
   int stepCount = 0, step = 0, stepSamples = 1, samplesInStep = 0;
   uint64_t noise = 1;
+  int decay = 0;
+  double sustain = 1.0;
+  SynthFilter filter{};
+  double filterHz = 0.0, filterHzEnd = 0.0, filterQ = 0.7071;
+  bool fmActive = false;
+  double fmRatio = 1.0, fmDepth = 0.0, fmDepthDelta = 0.0, modPhase = 0.0;
 };
 
 struct Tail {
@@ -136,6 +153,9 @@ struct Tail {
   int bitDepth = 0, wavetableSize = 0;
   std::array<double, kMaxWavetableSamples> wavetable{};
   int total = 1, remaining = 0;
+  SynthFilter filter{};
+  bool fmActive = false;
+  double fmRatio = 1.0, fmDepth = 0.0, modPhase = 0.0;
 };
 
 class Engine final : public oboe::AudioStreamDataCallback,
@@ -420,6 +440,31 @@ private:
           (clampValue(command.pulseWidthEnd, 0.05, 0.95) - voice->pulseWidth) /
           (voice->duration - 1);
     }
+    voice->decay =
+        clampValue(command.decay, 0, std::max(0, voice->duration - voice->attack));
+    voice->sustain = clampValue(command.sustain, 0.0, 1.0);
+    synth_filter_init(&voice->filter, clampValue(command.filterType, 0, 3));
+    if (voice->filter.type != SYNTH_FILTER_NONE) {
+      const double maxHz = renderSampleRate_ * 0.45;
+      voice->filterHz = clampValue(command.filterHz, SYNTH_FILTER_MIN_HZ, maxHz);
+      voice->filterHzEnd = command.filterHzEnd >= SYNTH_FILTER_MIN_HZ
+                               ? clampValue(command.filterHzEnd, SYNTH_FILTER_MIN_HZ, maxHz)
+                               : 0.0;
+      voice->filterQ = command.filterQ;
+      synth_filter_set(&voice->filter, voice->filterHz, voice->filterQ,
+                       renderSampleRate_);
+    }
+    voice->fmActive =
+        voice->waveType == 0 && (command.fmDepth > 0.0 || command.fmDepthSweep);
+    if (voice->fmActive) {
+      voice->fmRatio = clampValue(command.fmRatio, 0.1, 16.0);
+      voice->fmDepth = clampValue(command.fmDepth, 0.0, 10.0);
+      if (command.fmDepthSweep && voice->duration > 1) {
+        voice->fmDepthDelta =
+            (clampValue(command.fmDepthEnd, 0.0, 10.0) - voice->fmDepth) /
+            (voice->duration - 1);
+      }
+    }
     voice->bitDepth = command.bitDepth == 0 ? 0 : clampValue(command.bitDepth, 2, 16);
     voice->wavetableSize = clampValue(command.wavetableSize, 0, kMaxWavetableSamples);
     voice->wavetable = command.wavetable;
@@ -468,6 +513,11 @@ private:
     tail->bitDepth = voice.bitDepth;
     tail->wavetableSize = voice.wavetableSize;
     tail->wavetable = voice.wavetable;
+    tail->filter = voice.filter;
+    tail->fmActive = voice.fmActive;
+    tail->fmRatio = voice.fmRatio;
+    tail->fmDepth = voice.fmDepth;
+    tail->modPhase = voice.modPhase;
     tail->total = toSamples(milliseconds);
     tail->remaining = tail->total;
   }
@@ -486,6 +536,8 @@ private:
       wave = tail.heldNoise;
     } else if (tail.waveType == 5) {
       wave = wavetableWave(tail.phase, tail.wavetable, tail.wavetableSize);
+    } else if (tail.fmActive) {
+      wave = synth_fm_sine(tail.phase, tail.modPhase, tail.fmDepth);
     } else {
       wave = periodicWave(tail.waveType, tail.phase, tail.increment, tail.pulseWidth);
     }
@@ -494,6 +546,7 @@ private:
       tail.filterState += tail.filterAlpha * (wave - tail.filterState);
       wave = tail.filterState;
     }
+    wave = synth_filter_process(&tail.filter, wave);
     const double fade = smoothStep(static_cast<double>(tail.remaining - 1) /
                                    std::max(1, tail.total - 1));
     const double sample = wave * tail.volume * fade;
@@ -501,6 +554,10 @@ private:
     right += sample * tail.right;
     tail.phase += tail.increment;
     tail.phase -= std::floor(tail.phase);
+    if (tail.fmActive) {
+      tail.modPhase += tail.increment * tail.fmRatio;
+      tail.modPhase -= std::floor(tail.modPhase);
+    }
     if (--tail.remaining <= 0)
       tail.active = false;
   }
@@ -535,6 +592,8 @@ private:
       wave = voice.heldNoise;
     } else if (voice.waveType == 5) {
       wave = wavetableWave(voice.phase, voice.wavetable, voice.wavetableSize);
+    } else if (voice.fmActive) {
+      wave = synth_fm_sine(voice.phase, voice.modPhase, voice.fmDepth);
     } else {
       wave = periodicWave(voice.waveType, voice.phase, increment, voice.pulseWidth);
     }
@@ -543,20 +602,29 @@ private:
       voice.filterState += voice.filterAlpha * (wave - voice.filterState);
       wave = voice.filterState;
     }
-    const int remaining = voice.duration - voice.played;
-    double envelope = 1.0;
-    if (voice.attack > 0 && voice.played < voice.attack)
-      envelope = smoothStep(static_cast<double>(voice.played) /
-                            std::max(1, voice.attack - 1));
-    else if (voice.release > 0 && remaining <= voice.release)
-      envelope = smoothStep(static_cast<double>(remaining - 1) /
-                            std::max(1, voice.release - 1));
+    if (voice.filter.type != SYNTH_FILTER_NONE) {
+      if (voice.filterHzEnd > 0.0 && synth_filter_update_due(1, voice.played)) {
+        synth_filter_set(&voice.filter,
+                         synth_geometric_at(voice.filterHz, voice.filterHzEnd,
+                                            synth_sweep_progress(voice.played, voice.duration)),
+                         voice.filterQ, renderSampleRate_);
+      }
+      wave = synth_filter_process(&voice.filter, wave);
+    }
+    const double envelope =
+        synth_envelope(voice.played, voice.duration, voice.attack, voice.decay,
+                       voice.sustain, voice.release);
     voice.envelope = envelope;
     const double sample = wave * envelope * voice.volume;
     left += sample * voice.left;
     right += sample * voice.right;
     voice.phase += increment;
     voice.phase -= std::floor(voice.phase);
+    if (voice.fmActive) {
+      voice.modPhase += increment * voice.fmRatio;
+      voice.modPhase -= std::floor(voice.modPhase);
+      voice.fmDepth = clampValue(voice.fmDepth + voice.fmDepthDelta, 0.0, 10.0);
+    }
     voice.increment += voice.incrementDelta;
     voice.noiseIncrement += voice.noiseIncrementDelta;
     voice.pulseWidth = clampValue(voice.pulseWidth + voice.pulseWidthDelta, 0.05, 0.95);
@@ -664,6 +732,25 @@ Command makeCommand(Engine *engine, double frequency, int durationMs,
   command.bitDepth = bitDepth;
   return command;
 }
+
+void applyExtras(JNIEnv *env, Command &command, jdoubleArray extras,
+                 int sampleRate) {
+  double v[kExtraCount] = {0.0, 1.0, 0.0, 1000.0, 0.0, 0.7071, 1.0, 0.0, NAN};
+  if (extras) {
+    const int count = std::min<int>(env->GetArrayLength(extras), kExtraCount);
+    env->GetDoubleArrayRegion(extras, 0, count, v);
+  }
+  command.decay = std::max(0, static_cast<int>(v[0] * sampleRate / 1000.0));
+  command.sustain = v[1];
+  command.filterType = static_cast<int>(v[2]);
+  command.filterHz = v[3];
+  command.filterHzEnd = v[4];
+  command.filterQ = v[5];
+  command.fmRatio = v[6];
+  command.fmDepth = v[7];
+  command.fmDepthSweep = !std::isnan(v[8]);
+  command.fmDepthEnd = command.fmDepthSweep ? v[8] : 0.0;
+}
 } // namespace
 
 extern "C" JNIEXPORT jlong JNICALL Java_ti_synthengine_SynthThread_nativeCreate(
@@ -695,7 +782,8 @@ Java_ti_synthengine_SynthThread_nativeEnqueueNote(
     jdouble panEnd, jdouble frequencyEnd, jdouble lfoFreq, jdouble lfoDepth,
     jdouble noiseRate, jdouble noiseRateEnd, jdouble lowPassHz,
     jdouble pulseWidth, jdouble pulseWidthEnd, jint bitDepth,
-    jdoubleArray wavetable, jdoubleArray steps, jint stepCount, jint stepMs) {
+    jdoubleArray wavetable, jdoubleArray steps, jint stepCount, jint stepMs,
+    jdoubleArray extras) {
   EngineHandle engine = fromHandle(handle);
   Command command =
       makeCommand(engine.get(), frequency, duration, attack, release, volume,
@@ -715,6 +803,7 @@ Java_ti_synthengine_SynthThread_nativeEnqueueNote(
     command.stepCount = count;
     command.stepDurationMs = stepMs;
   }
+  applyExtras(env, command, extras, engine->sampleRate());
   return engine->enqueue(command);
 }
 extern "C" JNIEXPORT jboolean JNICALL
@@ -722,7 +811,8 @@ Java_ti_synthengine_SynthThread_nativeEnqueueChord(
     JNIEnv *env, jclass, jlong handle, jdoubleArray frequencies, jint duration,
     jint attack, jint release, jdouble volume, jint waveType,
     jdoubleArray pans, jdouble noiseRate, jdouble lowPassHz,
-    jdouble pulseWidth, jint bitDepth, jdoubleArray wavetable) {
+    jdouble pulseWidth, jint bitDepth, jdoubleArray wavetable,
+    jdoubleArray extras) {
   if (!frequencies)
     return true;
   EngineHandle engine = fromHandle(handle);
@@ -747,6 +837,7 @@ Java_ti_synthengine_SynthThread_nativeEnqueueChord(
       env->GetDoubleArrayRegion(wavetable, 0, tableCount, command.wavetable.data());
       command.wavetableSize = tableCount;
     }
+    applyExtras(env, command, extras, engine->sampleRate());
     command.eventVoiceCount = count;
     commands.push_back(command);
   }

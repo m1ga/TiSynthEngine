@@ -43,6 +43,9 @@ public class TiSynthEngineModule extends KrollModule {
     private volatile SynthThread synthThread;
     private ScheduledExecutorService patternScheduler;
     private final Set<String> warnedKeys = new HashSet<>();
+    private final Object patternLock = new Object();
+    private boolean patternPending;
+    private int patternToken;
 
     public TiSynthEngineModule() {
         super();
@@ -80,6 +83,15 @@ public class TiSynthEngineModule extends KrollModule {
         defaults.put("bpm", SynthContract.DEFAULT_BPM);
         defaults.put("swing", SynthContract.DEFAULT_SWING);
         defaults.put("stepDuration", SynthContract.DEFAULT_STEP_DURATION_MS);
+        defaults.put("decay", SynthContract.DEFAULT_DECAY_MS);
+        defaults.put("sustain", SynthContract.DEFAULT_SUSTAIN);
+        defaults.put("filterType", SynthContract.DEFAULT_FILTER_TYPE);
+        defaults.put("filterHz", SynthContract.DEFAULT_FILTER_HZ);
+        defaults.put("filterHzEnd", 0.0);
+        defaults.put("filterQ", SynthContract.DEFAULT_FILTER_Q);
+        defaults.put("fmRatio", SynthContract.DEFAULT_FM_RATIO);
+        defaults.put("fmDepth", SynthContract.DEFAULT_FM_DEPTH);
+        defaults.put("detune", SynthContract.DEFAULT_DETUNE_CENTS);
 
         KrollDict limits = new KrollDict();
         limits.put("maxVoices", range(SynthContract.MIN_MAX_VOICES, MAX_VOICES_LIMIT));
@@ -104,6 +116,13 @@ public class TiSynthEngineModule extends KrollModule {
         limits.put("bpm", range(SynthContract.MIN_BPM, SynthContract.MAX_BPM));
         limits.put("swing", range(SynthContract.MIN_SWING, SynthContract.MAX_SWING));
         limits.put("stepDuration", range(DURATION_MIN_MS, DURATION_MAX_MS));
+        limits.put("decay", range(0, SynthContract.MAX_DECAY_MS));
+        limits.put("sustain", range(0.0, 1.0));
+        limits.put("filterHz", range(SynthContract.MIN_FILTER_HZ, maxFrequencyHz()));
+        limits.put("filterQ", range(SynthContract.MIN_FILTER_Q, SynthContract.MAX_FILTER_Q));
+        limits.put("fmRatio", range(SynthContract.MIN_FM_RATIO, SynthContract.MAX_FM_RATIO));
+        limits.put("fmDepth", range(0.0, SynthContract.MAX_FM_DEPTH));
+        limits.put("detune", range(-SynthContract.MAX_DETUNE_CENTS, SynthContract.MAX_DETUNE_CENTS));
 
         KrollDict waveTypes = new KrollDict();
         waveTypes.put("SINE", 0);
@@ -119,6 +138,7 @@ public class TiSynthEngineModule extends KrollModule {
         result.put("limits", limits);
         result.put("mixingProfiles", new Object[]{"conservative", "raw", "balanced", "speakerSafe"});
         result.put("audioSessions", new Object[]{"playback", "ambient"});
+        result.put("filterTypes", SynthContract.FILTER_TYPES.clone());
         result.put("waveTypes", waveTypes);
         return result;
     }
@@ -203,6 +223,16 @@ public class TiSynthEngineModule extends KrollModule {
         int bitDepth = readOptionalIntOption(options, "playTone", "bitDepth",
                 0, 0, SynthContract.MAX_BIT_DEPTH);
         double[] waveTable = parseWaveTable(options);
+        double[] extras = readExtras(options, defaultExtras());
+        double detune = readOptionalDoubleOption(options, "playTone", "detune",
+                0.0, -SynthContract.MAX_DETUNE_CENTS, SynthContract.MAX_DETUNE_CENTS);
+        if (detune != 0.0) {
+            double ratio = detuneRatio(detune);
+            frequency = clamp(frequency * ratio, MIN_FREQUENCY_HZ, maxFreq);
+            if (freqEnd >= MIN_FREQUENCY_HZ) {
+                freqEnd = clamp(freqEnd * ratio, MIN_FREQUENCY_HZ, maxFreq);
+            }
+        }
 
         if (attack >= duration) attack = Math.max(0, duration - 1);
         int maxRelease = Math.max(0, duration - attack);
@@ -212,7 +242,7 @@ public class TiSynthEngineModule extends KrollModule {
                 frequency, duration, attack, release, volume,
                 waveType, pan, panEnd, freqEnd, lfoFreq, lfoDepth,
                 noiseRate, noiseRateEnd, lowPassHz, pulseWidth, pulseWidthEnd,
-                bitDepth, waveTable, null, 0, 100);
+                bitDepth, waveTable, null, 0, 100, extras);
         if (dropped) {
             warnOnce("playTone", "queue", "overflow", "command_queue_full", "drop_newest");
         }
@@ -251,6 +281,17 @@ public class TiSynthEngineModule extends KrollModule {
         int bitDepth = readOptionalIntOption(options, "playChord", "bitDepth",
                 0, 0, SynthContract.MAX_BIT_DEPTH);
         double[] waveTable = parseWaveTable(options);
+        double[] extras = readExtras(options, defaultExtras());
+
+        if (containsKey(options, "detunes")) {
+            Object[] cents = (Object[]) options.get("detunes");
+            for (int i = 0; i < cents.length && i < freqs.length; i++) {
+                Double value = parseFiniteDouble(cents[i]);
+                if (value != null && value != 0.0) {
+                    freqs[i] = clamp(freqs[i] * detuneRatio(value), MIN_FREQUENCY_HZ, maxFreq);
+                }
+            }
+        }
 
         if (attack >= duration) attack = Math.max(0, duration - 1);
         int maxRelease = Math.max(0, duration - attack);
@@ -282,7 +323,7 @@ public class TiSynthEngineModule extends KrollModule {
         }
         boolean dropped = synthThread.enqueueChord(freqs, duration, attack, release,
                 volume, waveType, pans, noiseRate, lowPassHz, pulseWidth,
-                bitDepth, waveTable);
+                bitDepth, waveTable, extras);
         if (dropped) {
             warnOnce("playChord", "queue", "overflow", "command_queue_full", "drop_newest");
         }
@@ -357,6 +398,18 @@ public class TiSynthEngineModule extends KrollModule {
         int globalBitDepth = readOptionalIntOption(options, "playPattern", "bitDepth",
                 0, 0, SynthContract.MAX_BIT_DEPTH);
         double[] globalWaveTable = parseWaveTable(options);
+        double[] globalExtras = readExtras(options, defaultExtras());
+        double globalDetune = readOptionalDoubleOption(options, "playPattern", "detune",
+                0.0, -SynthContract.MAX_DETUNE_CENTS, SynthContract.MAX_DETUNE_CENTS);
+
+        final int patternId;
+        final boolean replaced;
+        synchronized (patternLock) {
+            replaced = patternPending;
+            patternPending = true;
+            patternId = ++patternToken;
+        }
+        if (replaced) firePatternEnd(false);
 
         patternScheduler = Executors.newSingleThreadScheduledExecutor();
         final ScheduledExecutorService scheduler = patternScheduler;
@@ -433,6 +486,17 @@ public class TiSynthEngineModule extends KrollModule {
                         globalBitDepth, 0, SynthContract.MAX_BIT_DEPTH);
                 double[] waveTable = containsKey(step, "waveTable")
                         ? parseWaveTable(step) : globalWaveTable;
+                double[] stepExtras = readExtras(step, globalExtras);
+                double stepDetune = readOptionalDoubleOption(step, "step", "detune",
+                        globalDetune, -SynthContract.MAX_DETUNE_CENTS,
+                        SynthContract.MAX_DETUNE_CENTS);
+                if (stepDetune != 0.0) {
+                    double ratio = detuneRatio(stepDetune);
+                    freq = clamp(freq * ratio, MIN_FREQUENCY_HZ, maxFreq);
+                    if (frequencyEnd >= MIN_FREQUENCY_HZ) {
+                        frequencyEnd = clamp(frequencyEnd * ratio, MIN_FREQUENCY_HZ, maxFreq);
+                    }
+                }
 
                 if (attack >= dur) attack = Math.max(0, dur - 1);
                 int maxRel = Math.max(0, dur - attack);
@@ -456,6 +520,7 @@ public class TiSynthEngineModule extends KrollModule {
                 final double  fpwe = pulseWidthEnd;
                 final int     fbd = bitDepth;
                 final double[] fwt = waveTable;
+                final double[] fex = stepExtras;
 
                 long schedMs = Math.round(cumulativeMs + swingOffsetMs);
                 if (schedMs < 0) schedMs = 0;
@@ -464,7 +529,7 @@ public class TiSynthEngineModule extends KrollModule {
                     if (synthThread != null) {
                         boolean dropped = synthThread.enqueueNote(ff, fd, fa, fr, fv,
                                 fw, fp, fpe, ffe, flf, fld, fnr, fnre, flp,
-                                fpw, fpwe, fbd, fwt, null, 0, 100);
+                                fpw, fpwe, fbd, fwt, null, 0, 100, fex);
                         if (dropped) {
                             warnOnce("playPattern", "queue", "overflow",
                                     "command_queue_full", "drop_newest");
@@ -477,7 +542,15 @@ public class TiSynthEngineModule extends KrollModule {
         }
 
         long shutdownDelayMs = Math.max(1L, (long) Math.ceil(cumulativeMs) + 1L);
-        scheduler.schedule(scheduler::shutdown, shutdownDelayMs, TimeUnit.MILLISECONDS);
+        scheduler.schedule(() -> {
+            boolean completed;
+            synchronized (patternLock) {
+                completed = patternPending && patternToken == patternId;
+                if (completed) patternPending = false;
+            }
+            if (completed) firePatternEnd(true);
+            scheduler.shutdown();
+        }, shutdownDelayMs, TimeUnit.MILLISECONDS);
         return true;
     }
 
@@ -495,6 +568,9 @@ public class TiSynthEngineModule extends KrollModule {
         if (patternScheduler != null) {
             patternScheduler.shutdownNow();
             patternScheduler = null;
+        }
+        synchronized (patternLock) {
+            patternPending = false;
         }
         if (synthThread == null) return;
         boolean dropped = synthThread.requestShutdown();
@@ -664,6 +740,54 @@ public class TiSynthEngineModule extends KrollModule {
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    private void firePatternEnd(boolean completed) {
+        KrollDict event = new KrollDict();
+        event.put("completed", completed);
+        fireEvent("patternend", event);
+    }
+
+    private static double detuneRatio(double cents) {
+        return Math.pow(2.0, cents / 1200.0);
+    }
+
+    private static double[] defaultExtras() {
+        double[] extras = new double[SynthThread.EXTRA_COUNT];
+        extras[SynthThread.EXTRA_DECAY_MS] = SynthContract.DEFAULT_DECAY_MS;
+        extras[SynthThread.EXTRA_SUSTAIN] = SynthContract.DEFAULT_SUSTAIN;
+        extras[SynthThread.EXTRA_FILTER_TYPE] = 0;
+        extras[SynthThread.EXTRA_FILTER_HZ] = SynthContract.DEFAULT_FILTER_HZ;
+        extras[SynthThread.EXTRA_FILTER_HZ_END] = 0.0;
+        extras[SynthThread.EXTRA_FILTER_Q] = SynthContract.DEFAULT_FILTER_Q;
+        extras[SynthThread.EXTRA_FM_RATIO] = SynthContract.DEFAULT_FM_RATIO;
+        extras[SynthThread.EXTRA_FM_DEPTH] = SynthContract.DEFAULT_FM_DEPTH;
+        extras[SynthThread.EXTRA_FM_DEPTH_END] = Double.NaN;
+        return extras;
+    }
+
+    /** The decay, sustain, filter and FM values of one event, over the values it inherits. */
+    private double[] readExtras(KrollDict options, double[] inherited) {
+        double[] extras = inherited.clone();
+        copyNumber(options, "decay", extras, SynthThread.EXTRA_DECAY_MS);
+        copyNumber(options, "sustain", extras, SynthThread.EXTRA_SUSTAIN);
+        copyNumber(options, "filterHz", extras, SynthThread.EXTRA_FILTER_HZ);
+        copyNumber(options, "filterHzEnd", extras, SynthThread.EXTRA_FILTER_HZ_END);
+        copyNumber(options, "filterQ", extras, SynthThread.EXTRA_FILTER_Q);
+        copyNumber(options, "fmRatio", extras, SynthThread.EXTRA_FM_RATIO);
+        copyNumber(options, "fmDepth", extras, SynthThread.EXTRA_FM_DEPTH);
+        copyNumber(options, "fmDepthEnd", extras, SynthThread.EXTRA_FM_DEPTH_END);
+        if (containsKey(options, "filterType")) {
+            extras[SynthThread.EXTRA_FILTER_TYPE] =
+                    SynthContract.filterTypeIndex((String) options.get("filterType"));
+        }
+        return extras;
+    }
+
+    private void copyNumber(KrollDict options, String key, double[] target, int index) {
+        if (!containsKey(options, key)) return;
+        Double value = parseFiniteDouble(options.get(key));
+        if (value != null) target[index] = value;
+    }
 
     private double maxFrequencyHz() {
         return synthThread != null ? synthThread.getSampleRate() * 0.45 : 44100.0 * 0.45;
