@@ -29,6 +29,11 @@ jobs:
           node tests/default_profile_regression.js
           node tests/documentation_regression.js
 
+      - name: Shared DSP core tests
+        run: |
+          cc -std=c99 -O2 -Wall -Wextra -Wpedantic -o "$RUNNER_TEMP/dsp_core" tests/dsp_core_regression.c -lm
+          "$RUNNER_TEMP/dsp_core"
+
       - name: Java contract and DSP tests
         working-directory: android
         run: |
