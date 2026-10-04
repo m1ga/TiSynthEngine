@@ -74,25 +74,31 @@ const supportedOptions = {
     'frequency', 'note', 'duration', 'attack', 'release', 'volume',
     'waveType', 'pan', 'panEnd', 'frequencyEnd', 'lfoFreq', 'lfoDepth',
     'noiseRate', 'noiseRateEnd', 'lowPassHz', 'pulseWidth', 'pulseWidthEnd',
-    'waveTable', 'bitDepth'
+    'waveTable', 'bitDepth', 'decay', 'sustain', 'filterType', 'filterHz',
+    'filterHzEnd', 'filterQ', 'fmRatio', 'fmDepth', 'fmDepthEnd', 'detune'
   ],
   Chord: [
     'frequencies', 'notes', 'duration', 'attack', 'release', 'volume',
     'waveType', 'panSpread', 'pans', 'noiseRate', 'lowPassHz', 'pulseWidth',
-    'waveTable', 'bitDepth'
+    'waveTable', 'bitDepth', 'decay', 'sustain', 'filterType', 'filterHz',
+    'filterQ', 'fmRatio', 'fmDepth', 'detunes'
   ],
   Pattern: [
     'steps', 'bpm', 'swing', 'stepDuration', 'noteValue', 'attack',
     'release', 'volume', 'waveType', 'pan', 'panEnd',
     'frequencyEnd', 'lfoFreq', 'lfoDepth', 'noiseRate', 'noiseRateEnd',
-    'lowPassHz', 'pulseWidth', 'pulseWidthEnd', 'waveTable', 'bitDepth'
+    'lowPassHz', 'pulseWidth', 'pulseWidthEnd', 'waveTable', 'bitDepth',
+    'decay', 'sustain', 'filterType', 'filterHz', 'filterHzEnd', 'filterQ',
+    'fmRatio', 'fmDepth', 'fmDepthEnd', 'detune'
   ]
 }
 const patternStepOptions = [
   'rest', 'frequency', 'note', 'duration', 'noteValue', 'attack',
   'release', 'volume', 'waveType', 'pan', 'panEnd', 'frequencyEnd',
   'lfoFreq', 'lfoDepth', 'noiseRate', 'noiseRateEnd', 'lowPassHz',
-  'pulseWidth', 'pulseWidthEnd', 'waveTable', 'bitDepth'
+  'pulseWidth', 'pulseWidthEnd', 'waveTable', 'bitDepth', 'decay', 'sustain',
+  'filterType', 'filterHz', 'filterHzEnd', 'filterQ', 'fmRatio', 'fmDepth',
+  'fmDepthEnd', 'detune'
 ]
 
 function quotedValues(source, pattern, label) {
@@ -213,5 +219,42 @@ assert(exampleApp.indexOf("addEventListener('postlayout'") < exampleApp.indexOf(
   'example registers postlayout before opening')
 assert(exampleApp.indexOf('function startAppCycles()') < exampleApp.lastIndexOf('Synth.startEngine('),
   'example starts the engine from its deferred app cycle')
+
+for (const [name, source] of [['Android', androidNative], ['iOS', iosModule]]) {
+  assert(source.includes('#include "../../shared/synth_core.h"'), `${name} renderer includes the shared DSP core`)
+  for (const call of ['synth_envelope(', 'synth_filter_process(', 'synth_fm_sine(', 'synth_filter_set(']) {
+    assert(source.includes(call), `${name} renderer uses ${call} from the shared DSP core`)
+  }
+}
+assert.strictEqual(androidThread.match(/EXTRA_COUNT = (\d+)/)[1], androidNative.match(/kExtraCount = (\d+)/)[1],
+  'Java and C++ agree on the number of extra voice parameters')
+for (const key of ['decay', 'sustain', 'filterType', 'filterHz', 'filterHzEnd', 'filterQ', 'fmRatio', 'fmDepth', 'detune']) {
+  assert(androidModule.includes(`defaults.put("${key}"`), `Android getDefaults reports ${key}`)
+  assert(iosContract.includes(`@"${key}"`), `iOS getDefaults reports ${key}`)
+}
+assert(androidModule.includes('"filterTypes"') && iosContract.includes('@"filterTypes"'),
+  'both ports report the filter types')
+assert(androidModule.includes('fireEvent("patternend"') && iosModule.includes('@"patternend"'),
+  'both ports fire patternend')
+
+const noteValueList = values => [...values].sort().join(' ')
+const documentedNoteValues = read('documentation/api.md')
+  .split('\n\n')
+  .find(paragraph => paragraph.includes('The allowed `noteValue` strings'))
+const androidNoteValues = androidContract
+  .slice(androidContract.indexOf('Validation optionalNoteValue('))
+  .split('Validation validNote(')[0]
+const iosNoteValues = iosContract
+  .slice(iosContract.indexOf('OptionalNoteValue('))
+  .split('stringByTrimmingCharactersInSet')[0]
+assert(documentedNoteValues, 'api.md documents the allowed noteValue strings')
+assert.strictEqual(
+  noteValueList([...documentedNoteValues.matchAll(/`(\d+[nt]\.?)`/g)].map(match => match[1])),
+  noteValueList([...androidNoteValues.matchAll(/"(\d+[nt]\.?)"\.equals/g)].map(match => match[1])),
+  'api.md lists exactly the noteValue strings Android accepts')
+assert.strictEqual(
+  noteValueList([...iosNoteValues.matchAll(/@"(\d+[nt]\.?)"/g)].map(match => match[1])),
+  noteValueList([...androidNoteValues.matchAll(/"(\d+[nt]\.?)"\.equals/g)].map(match => match[1])),
+  'iOS accepts exactly the noteValue strings Android accepts')
 
 console.log('api_contract_regression: all tests passed')
