@@ -60,6 +60,24 @@ final class SynthContract {
     static final double MAX_SWING = 0.49;
     static final double MAX_LFO = 20000.0;
 
+    static final int DEFAULT_DECAY_MS = 0;
+    static final int MAX_DECAY_MS = 4000;
+    static final double DEFAULT_SUSTAIN = 1.0;
+    static final String DEFAULT_FILTER_TYPE = "none";
+    static final String[] FILTER_TYPES = {"none", "lowpass", "highpass", "bandpass"};
+    static final double DEFAULT_FILTER_HZ = 1000.0;
+    static final double MIN_FILTER_HZ = 20.0;
+    static final double DEFAULT_FILTER_Q = 0.7071;
+    static final double MIN_FILTER_Q = 0.5;
+    static final double MAX_FILTER_Q = 10.0;
+    static final double DEFAULT_FM_RATIO = 1.0;
+    static final double MIN_FM_RATIO = 0.1;
+    static final double MAX_FM_RATIO = 16.0;
+    static final double DEFAULT_FM_DEPTH = 0.0;
+    static final double MAX_FM_DEPTH = 10.0;
+    static final double DEFAULT_DETUNE_CENTS = 0.0;
+    static final double MAX_DETUNE_CENTS = 1200.0;
+
     static final class Validation {
         final boolean accepted;
         final String key;
@@ -131,7 +149,8 @@ final class SynthContract {
                 "frequency", "note", "duration", "attack", "release", "volume",
                 "waveType", "pan", "panEnd", "frequencyEnd", "lfoFreq", "lfoDepth",
                 "noiseRate", "noiseRateEnd", "lowPassHz", "pulseWidth", "pulseWidthEnd",
-                "waveTable", "bitDepth");
+                "waveTable", "bitDepth", "decay", "sustain", "filterType", "filterHz",
+                "filterHzEnd", "filterQ", "fmRatio", "fmDepth", "fmDepthEnd", "detune");
         if (!result.accepted) return result;
 
         boolean hasFrequency = contains(options, "frequency");
@@ -152,14 +171,21 @@ final class SynthContract {
         if (!result.accepted) return result;
         result = validateWaveTableRequirement(options, DEFAULT_WAVE_TYPE, false);
         if (!result.accepted) return result;
-        return validateExplicitEnvelope(options);
+        result = validateExplicitEnvelope(options);
+        if (!result.accepted) return result;
+        result = validateExpressiveRules(options, readInteger(options, "duration", DEFAULT_DURATION_MS));
+        if (!result.accepted) return result;
+        double toneFrequency = hasNote ? parseNoteToFrequency((String) options.get("note"))
+                : (hasFrequency ? finiteDouble(options.get("frequency")) : DEFAULT_FREQUENCY_HZ);
+        return validateDetuneRange(options, toneFrequency, maxFrequencyHz);
     }
 
     static Validation validateChord(Map<String, Object> options, double maxFrequencyHz) {
         Validation result = rejectUnknownOptions(options,
                 "frequencies", "notes", "duration", "attack", "release", "volume",
                 "waveType", "panSpread", "pans", "noiseRate", "lowPassHz",
-                "pulseWidth", "waveTable", "bitDepth");
+                "pulseWidth", "waveTable", "bitDepth", "decay", "sustain", "filterType",
+                "filterHz", "filterQ", "fmRatio", "fmDepth", "detunes");
         if (!result.accepted) return result;
 
         boolean hasFrequencies = contains(options, "frequencies");
@@ -205,7 +231,38 @@ final class SynthContract {
                 if (!result.accepted) return result;
             }
         }
-        return validateExplicitEnvelope(options);
+        result = validateExplicitEnvelope(options);
+        if (!result.accepted) return result;
+
+        Object[] detunes = null;
+        if (contains(options, "detunes")) {
+            Object rawDetunes = options.get("detunes");
+            if (!(rawDetunes instanceof Object[])) {
+                return Validation.rejected("detunes", "not_array", rawDetunes);
+            }
+            detunes = (Object[]) rawDetunes;
+            if (detunes.length > pitches.length) {
+                return Validation.rejected("detunes", "too_many_values", detunes.length);
+            }
+            for (Object detune : detunes) {
+                result = finiteDoubleInRange(detune, "detunes", -MAX_DETUNE_CENTS, MAX_DETUNE_CENTS);
+                if (!result.accepted) return result;
+            }
+        }
+
+        result = validateExpressiveRules(options, readInteger(options, "duration", DEFAULT_DURATION_MS));
+        if (!result.accepted) return result;
+        if (detunes != null) {
+            for (int i = 0; i < detunes.length; i++) {
+                double cents = finiteDouble(detunes[i]);
+                if (cents == 0.0) continue;
+                double base = hasFrequencies ? finiteDouble(pitches[i]) : parseNoteToFrequency((String) pitches[i]);
+                if (!frequencyInRange(base * detuneRatio(cents), maxFrequencyHz)) {
+                    return Validation.rejected("detunes", "out_of_range", detunes[i]);
+                }
+            }
+        }
+        return Validation.accepted();
     }
 
     @SuppressWarnings("unchecked")
@@ -214,7 +271,9 @@ final class SynthContract {
                 "steps", "bpm", "swing", "stepDuration", "noteValue", "attack",
                 "release", "volume", "waveType", "pan", "panEnd",
                 "frequencyEnd", "lfoFreq", "lfoDepth", "noiseRate", "noiseRateEnd",
-                "lowPassHz", "pulseWidth", "pulseWidthEnd", "waveTable", "bitDepth");
+                "lowPassHz", "pulseWidth", "pulseWidthEnd", "waveTable", "bitDepth",
+                "decay", "sustain", "filterType", "filterHz", "filterHzEnd", "filterQ",
+                "fmRatio", "fmDepth", "fmDepthEnd", "detune");
         if (!result.accepted) return result;
 
         Object rawSteps = options != null ? options.get("steps") : null;
@@ -249,7 +308,9 @@ final class SynthContract {
                     "rest", "frequency", "note", "duration", "noteValue", "attack",
                     "release", "volume", "waveType", "pan", "panEnd", "frequencyEnd",
                     "lfoFreq", "lfoDepth", "noiseRate", "noiseRateEnd", "lowPassHz",
-                    "pulseWidth", "pulseWidthEnd", "waveTable", "bitDepth");
+                    "pulseWidth", "pulseWidthEnd", "waveTable", "bitDepth",
+                    "decay", "sustain", "filterType", "filterHz", "filterHzEnd", "filterQ",
+                    "fmRatio", "fmDepth", "fmDepthEnd", "detune");
             if (!result.accepted) return result;
 
             boolean rest = Boolean.TRUE.equals(step.get("rest"));
@@ -281,6 +342,17 @@ final class SynthContract {
                 result = validateWaveTableRequirement(step, globalWaveType, globalHasWaveTable);
                 if (!result.accepted) return result;
                 result = validatePatternEnvelope(options, step);
+                if (!result.accepted) return result;
+
+                Map<String, Object> effective = new java.util.HashMap<>(options);
+                effective.remove("steps");
+                effective.putAll(step);
+                int stepMs = (int) Math.round(resolvePatternStepDuration(options, step));
+                result = validateExpressiveRules(effective, stepMs);
+                if (!result.accepted) return result;
+                double stepFrequency = hasNote ? parseNoteToFrequency((String) step.get("note"))
+                        : finiteDouble(step.get("frequency"));
+                result = validateDetuneRange(effective, stepFrequency, maxFrequencyHz);
                 if (!result.accepted) return result;
             }
         }
@@ -432,6 +504,20 @@ final class SynthContract {
         if (!result.accepted) return result;
         result = optionalBitDepth(options, "bitDepth");
         if (!result.accepted) return result;
+        result = optionalInteger(options, "decay", 0, MAX_DECAY_MS);
+        if (!result.accepted) return result;
+        result = optionalDouble(options, "sustain", 0.0, 1.0);
+        if (!result.accepted) return result;
+        result = optionalFilterType(options, "filterType");
+        if (!result.accepted) return result;
+        result = optionalDouble(options, "filterHz", MIN_FILTER_HZ, maxFrequencyHz);
+        if (!result.accepted) return result;
+        result = optionalDouble(options, "filterQ", MIN_FILTER_Q, MAX_FILTER_Q);
+        if (!result.accepted) return result;
+        result = optionalDouble(options, "fmRatio", MIN_FM_RATIO, MAX_FM_RATIO);
+        if (!result.accepted) return result;
+        result = optionalDouble(options, "fmDepth", 0.0, MAX_FM_DEPTH);
+        if (!result.accepted) return result;
 
         if (allowSweep) {
             result = optionalDouble(options, "panEnd", -1.0, 1.0);
@@ -446,8 +532,103 @@ final class SynthContract {
             if (!result.accepted) return result;
             result = optionalPulseWidthEnd(options, "pulseWidthEnd");
             if (!result.accepted) return result;
+            result = optionalFilterHzEnd(options, "filterHzEnd", maxFrequencyHz);
+            if (!result.accepted) return result;
+            result = optionalDouble(options, "fmDepthEnd", 0.0, MAX_FM_DEPTH);
+            if (!result.accepted) return result;
+            result = optionalDouble(options, "detune", -MAX_DETUNE_CENTS, MAX_DETUNE_CENTS);
+            if (!result.accepted) return result;
         }
         return Validation.accepted();
+    }
+
+    private static Validation optionalFilterType(Map<String, Object> options, String key) {
+        if (!contains(options, key)) return Validation.accepted();
+        Object raw = options.get(key);
+        if (!(raw instanceof String)) return Validation.rejected(key, "not_string", raw);
+        return filterTypeIndex((String) raw) >= 0
+                ? Validation.accepted() : Validation.rejected(key, "unsupported_value", raw);
+    }
+
+    /** Index into FILTER_TYPES (0 means none), or -1 when the name is not allowed. */
+    static int filterTypeIndex(String raw) {
+        String value = raw.trim();
+        for (int i = 0; i < FILTER_TYPES.length; i++) {
+            if (FILTER_TYPES[i].equalsIgnoreCase(value)) return i;
+        }
+        return -1;
+    }
+
+    private static Validation optionalFilterHzEnd(Map<String, Object> options, String key,
+            double maxFrequencyHz) {
+        if (!contains(options, key)) return Validation.accepted();
+        Object raw = options.get(key);
+        Double parsed = finiteDouble(raw);
+        if (parsed == null) return Validation.rejected(key, "non_numeric_or_non_finite", raw);
+        if (parsed != 0.0 && (parsed < MIN_FILTER_HZ || parsed > maxFrequencyHz)) {
+            return Validation.rejected(key, "out_of_range", raw);
+        }
+        return Validation.accepted();
+    }
+
+    private static double detuneRatio(double cents) {
+        return Math.pow(2.0, cents / 1200.0);
+    }
+
+    private static boolean frequencyInRange(double frequency, double maxFrequencyHz) {
+        return frequency >= MIN_FREQUENCY_HZ && frequency <= maxFrequencyHz;
+    }
+
+    /**
+     * Rules that span several keys, evaluated on the effective values of one
+     * sounding event (a pattern step already merged over its pattern root).
+     */
+    private static Validation validateExpressiveRules(Map<String, Object> eff, int durationMs) {
+        int decay = readInteger(eff, "decay", DEFAULT_DECAY_MS);
+        if (contains(eff, "sustain") && finiteDouble(eff.get("sustain")) < 1.0 && decay == 0) {
+            return Validation.rejected("sustain", "sustain_without_decay", eff.get("sustain"));
+        }
+        if (decay > 0) {
+            int attack = Math.min(readInteger(eff, "attack", DEFAULT_ATTACK_MS), Math.max(0, durationMs - 1));
+            if (attack + decay > durationMs) {
+                return Validation.rejected("decay", "decay_exceeds_remaining_duration", eff.get("decay"));
+            }
+        }
+
+        boolean filtered = contains(eff, "filterType")
+                && filterTypeIndex((String) eff.get("filterType")) > 0;
+        if (!filtered) {
+            for (String key : new String[]{"filterHz", "filterHzEnd", "filterQ"}) {
+                if (contains(eff, key)) return Validation.rejected(key, "filter_type_required", eff.get(key));
+            }
+        }
+
+        double depth = contains(eff, "fmDepth") ? finiteDouble(eff.get("fmDepth")) : DEFAULT_FM_DEPTH;
+        boolean fmActive = depth > 0.0 || contains(eff, "fmDepthEnd");
+        if (fmActive && integerValue(eff, "waveType", DEFAULT_WAVE_TYPE) != 0) {
+            String key = depth > 0.0 ? "fmDepth" : "fmDepthEnd";
+            return Validation.rejected(key, "fm_requires_sine", eff.get(key));
+        }
+        if (contains(eff, "fmRatio") && !fmActive) {
+            return Validation.rejected("fmRatio", "fm_depth_required", eff.get("fmRatio"));
+        }
+        return Validation.accepted();
+    }
+
+    /** Detune must leave the starting pitch, and any sweep target, inside the audible range. */
+    private static Validation validateDetuneRange(Map<String, Object> eff, double frequency,
+            double maxFrequencyHz) {
+        if (!contains(eff, "detune")) return Validation.accepted();
+        double cents = finiteDouble(eff.get("detune"));
+        if (cents == 0.0) return Validation.accepted();
+        double ratio = detuneRatio(cents);
+        boolean inRange = frequencyInRange(frequency * ratio, maxFrequencyHz);
+        if (inRange && contains(eff, "frequencyEnd")) {
+            double end = finiteDouble(eff.get("frequencyEnd"));
+            if (end != 0.0) inRange = frequencyInRange(end * ratio, maxFrequencyHz);
+        }
+        return inRange ? Validation.accepted()
+                : Validation.rejected("detune", "out_of_range", eff.get("detune"));
     }
 
     private static Validation optionalWaveTable(Map<String, Object> options, String key) {

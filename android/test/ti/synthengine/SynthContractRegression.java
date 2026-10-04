@@ -6,7 +6,7 @@ import java.util.Map;
 public final class SynthContractRegression {
     private static final double MAX_FREQUENCY = 19845.0;
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws java.io.IOException {
         assertEquals("1.0.0", SynthContract.API_VERSION, "public API version");
         assertTrue(SynthContract.validateStartEngine(null).accepted, "omitted start options");
         assertEquals(8, SynthContract.DEFAULT_MAX_VOICES, "default voices");
@@ -152,7 +152,225 @@ public final class SynthContractRegression {
         assertRejectedWith(SynthContract.validateSetVolume(map("gain", 0.5)),
                 "gain", "unsupported_option", "volume rejects unknown option");
 
+        expressiveContract();
+        writeOrVerifyCorpus();
+
         System.out.println("SynthContractRegression: all tests passed");
+    }
+
+    private static final java.util.List<String> corpus = new java.util.ArrayList<>();
+
+    private static SynthContract.Validation tone(Object... entries) {
+        Map<String, Object> options = map(entries);
+        return record("playTone", options, SynthContract.validateTone(options, MAX_FREQUENCY));
+    }
+
+    private static SynthContract.Validation chord(Object... entries) {
+        Map<String, Object> options = map(entries);
+        return record("playChord", options, SynthContract.validateChord(options, MAX_FREQUENCY));
+    }
+
+    private static SynthContract.Validation pattern(Object... entries) {
+        Map<String, Object> options = map(entries);
+        return record("playPattern", options, SynthContract.validatePattern(options, MAX_FREQUENCY));
+    }
+
+    /**
+     * Every expressive-contract case is also written as one JSON line. The
+     * iOS contract is replayed against the same file, so the two ports cannot
+     * drift apart silently. Regenerate with -Dsynth.corpus.out=<path>.
+     */
+    private static SynthContract.Validation record(String method, Map<String, Object> options,
+            SynthContract.Validation result) {
+        StringBuilder line = new StringBuilder();
+        line.append("{\"method\":").append(json(method))
+                .append(",\"max\":").append(json(MAX_FREQUENCY))
+                .append(",\"options\":").append(json(options))
+                .append(",\"accepted\":").append(result.accepted);
+        if (!result.accepted) {
+            line.append(",\"key\":").append(json(result.key))
+                    .append(",\"reason\":").append(json(result.reason));
+        }
+        corpus.add(line.append("}").toString());
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String json(Object value) {
+        if (value == null) return "null";
+        if (value instanceof String) {
+            return "\"" + ((String) value).replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+        }
+        if (value instanceof Double) {
+            double d = (Double) value;
+            return d == Math.rint(d) && Math.abs(d) < 1e9 ? String.valueOf((long) d) + ".0" : Double.toString(d);
+        }
+        if (value instanceof Number || value instanceof Boolean) return value.toString();
+        if (value instanceof Object[]) {
+            StringBuilder out = new StringBuilder("[");
+            Object[] items = (Object[]) value;
+            for (int i = 0; i < items.length; i++) out.append(i > 0 ? "," : "").append(json(items[i]));
+            return out.append("]").toString();
+        }
+        Map<String, Object> object = (Map<String, Object>) value;
+        StringBuilder out = new StringBuilder("{");
+        boolean first = true;
+        for (String key : new java.util.TreeSet<>(object.keySet())) {
+            out.append(first ? "" : ",").append(json(key)).append(":").append(json(object.get(key)));
+            first = false;
+        }
+        return out.append("}").toString();
+    }
+
+    private static void writeOrVerifyCorpus() throws java.io.IOException {
+        String outPath = System.getProperty("synth.corpus.out");
+        java.nio.file.Path path = outPath != null ? java.nio.file.Paths.get(outPath)
+                : java.nio.file.Paths.get("..", "tests", "contract_corpus.jsonl");
+        String expected = String.join("\n", corpus) + "\n";
+        if (outPath != null) {
+            java.nio.file.Files.write(path, expected.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return;
+        }
+        String actual = new String(java.nio.file.Files.readAllBytes(path), java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals(actual, expected, "tests/contract_corpus.jsonl matches the Java contract (regenerate with -Dsynth.corpus.out)");
+    }
+
+    private static void expressiveContract() {
+        // Decay and sustain.
+        assertAccepted(tone("decay", 200, "sustain", 0.4, "attack", 5, "duration", 800), "decay and sustain");
+        assertAccepted(tone("decay", 450, "attack", 50, "duration", 500), "decay exactly fills the budget");
+        assertAccepted(tone("decay", 0, "sustain", 1.0), "explicit neutral envelope");
+        assertRejectedWith(tone("decay", 451, "attack", 50, "duration", 500),
+                "decay", "decay_exceeds_remaining_duration", "decay one over the budget");
+        assertRejectedWith(tone("decay", 700),
+                "decay", "decay_exceeds_remaining_duration", "default attack counts toward the decay budget");
+        assertAccepted(tone("decay", 1, "duration", 30), "default attack is clamped to the duration for the budget");
+        assertRejectedWith(tone("decay", 2, "duration", 30),
+                "decay", "decay_exceeds_remaining_duration", "clamped default attack leaves one sample");
+        assertRejectedWith(tone("decay", 4001, "duration", 60000),
+                "decay", "out_of_range", "decay upper bound");
+        assertRejectedWith(tone("decay", 1.5), "decay", "not_integer", "decay is an integer");
+        assertRejectedWith(tone("sustain", 1.1), "sustain", "out_of_range", "sustain upper bound");
+        assertRejectedWith(tone("sustain", -0.1), "sustain", "out_of_range", "sustain lower bound");
+        assertRejectedWith(tone("sustain", 0.5),
+                "sustain", "sustain_without_decay", "sustain below 1 needs a decay");
+        assertAccepted(tone("sustain", 1.0), "sustain 1 needs no decay");
+        assertAccepted(tone("sustain", 0.0, "decay", 100), "silent sustain with a decay");
+
+        // Resonant filter.
+        assertAccepted(tone("filterType", "lowpass", "filterHz", 800.0, "filterQ", 4.0), "lowpass filter");
+        assertAccepted(tone("filterType", " BandPass ", "filterHz", 1200.0, "filterHzEnd", 4000.0),
+                "filter type ignores case and whitespace; cutoff sweep");
+        assertAccepted(tone("filterType", "highpass"), "filter with default cutoff and Q");
+        assertAccepted(tone("filterType", "none"), "explicit no filter");
+        assertAccepted(tone("filterType", "lowpass", "filterHzEnd", 0.0), "zero end cutoff disables the sweep");
+        assertRejectedWith(tone("filterType", "notch"),
+                "filterType", "unsupported_value", "unknown filter type");
+        assertRejectedWith(tone("filterType", 3), "filterType", "not_string", "filter type must be a string");
+        assertRejectedWith(tone("filterType", "lowpass", "filterHz", 19.0),
+                "filterHz", "out_of_range", "cutoff lower bound");
+        assertRejectedWith(tone("filterType", "lowpass", "filterHz", 20000.0),
+                "filterHz", "out_of_range", "cutoff upper bound");
+        assertRejectedWith(tone("filterType", "lowpass", "filterHzEnd", 5.0),
+                "filterHzEnd", "out_of_range", "end cutoff is 0 or at least 20");
+        assertRejectedWith(tone("filterType", "lowpass", "filterQ", 0.4),
+                "filterQ", "out_of_range", "Q lower bound");
+        assertRejectedWith(tone("filterType", "lowpass", "filterQ", 10.5),
+                "filterQ", "out_of_range", "Q upper bound");
+        assertRejectedWith(tone("filterHz", 800.0),
+                "filterHz", "filter_type_required", "cutoff without a filter type");
+        assertRejectedWith(tone("filterType", "none", "filterQ", 2.0),
+                "filterQ", "filter_type_required", "Q with filter type none");
+        assertRejectedWith(tone("filterHzEnd", 3000.0),
+                "filterHzEnd", "filter_type_required", "end cutoff without a filter type");
+
+        // FM.
+        assertAccepted(tone("fmDepth", 2.0, "fmRatio", 3.5), "fm on the default sine");
+        assertAccepted(tone("fmDepth", 3.0, "fmDepthEnd", 0.0, "fmRatio", 1.4142), "fm index that decays to nothing");
+        assertAccepted(tone("fmDepth", 0.0, "fmDepthEnd", 4.0), "fm index that swells");
+        assertAccepted(tone("waveType", 1, "fmDepth", 0.0), "zero fm depth on another wave is inert");
+        assertRejectedWith(tone("fmDepth", 11.0), "fmDepth", "out_of_range", "fm depth upper bound");
+        assertRejectedWith(tone("fmDepth", 1.0, "fmRatio", 0.05), "fmRatio", "out_of_range", "fm ratio lower bound");
+        assertRejectedWith(tone("fmDepth", 1.0, "fmRatio", 17.0), "fmRatio", "out_of_range", "fm ratio upper bound");
+        assertRejectedWith(tone("fmDepthEnd", -0.1), "fmDepthEnd", "out_of_range", "fm end depth lower bound");
+        assertRejectedWith(tone("fmDepth", 2.0, "waveType", 1),
+                "fmDepth", "fm_requires_sine", "fm needs a sine carrier");
+        assertRejectedWith(tone("fmDepthEnd", 2.0, "waveType", 2),
+                "fmDepthEnd", "fm_requires_sine", "fm sweep needs a sine carrier");
+        assertRejectedWith(tone("fmRatio", 2.0),
+                "fmRatio", "fm_depth_required", "fm ratio without depth");
+
+        // Detune.
+        assertAccepted(tone("note", "A4", "detune", -7.5), "detune a note");
+        assertAccepted(tone("frequency", 440.0, "detune", 1200.0), "detune up one octave");
+        assertRejectedWith(tone("detune", 1201.0), "detune", "out_of_range", "detune upper bound");
+        assertRejectedWith(tone("detune", "5"), "detune", "non_numeric_or_non_finite", "detune is numeric");
+        assertRejectedWith(tone("frequency", 15000.0, "detune", 600.0),
+                "detune", "out_of_range", "detuned pitch above the limit");
+        assertRejectedWith(tone("frequency", 1.0, "detune", -1200.0),
+                "detune", "out_of_range", "detuned pitch below 1 Hz");
+        assertRejectedWith(tone("frequency", 440.0, "frequencyEnd", 15000.0, "detune", 600.0),
+                "detune", "out_of_range", "detuned sweep target above the limit");
+        assertRejectedWith(tone("detunes", new Object[]{1.0}),
+                "detunes", "unsupported_option", "tone has no per-note detunes");
+
+        // Chords: fixed shaping only.
+        assertAccepted(chord("notes", new Object[]{"C4", "E4", "G4"}, "decay", 300, "sustain", 0.5,
+                "duration", 1500, "filterType", "lowpass", "filterHz", 900.0, "filterQ", 2.0,
+                "fmDepth", 1.5, "fmRatio", 2.0, "detunes", new Object[]{-8.0, 0.0, 8.0}),
+                "expressive chord");
+        assertRejectedWith(chord("notes", new Object[]{"C4"}, "filterType", "lowpass", "filterHzEnd", 2000.0),
+                "filterHzEnd", "unsupported_option", "chord rejects a cutoff sweep");
+        assertRejectedWith(chord("notes", new Object[]{"C4"}, "fmDepth", 1.0, "fmDepthEnd", 0.0),
+                "fmDepthEnd", "unsupported_option", "chord rejects an fm sweep");
+        assertRejectedWith(chord("notes", new Object[]{"C4"}, "detune", 5.0),
+                "detune", "unsupported_option", "chord uses detunes, not detune");
+        assertRejectedWith(chord("notes", new Object[]{"C4", "E4"}, "detunes", new Object[]{1.0, 2.0, 3.0}),
+                "detunes", "too_many_values", "more detunes than pitches");
+        assertRejectedWith(chord("notes", new Object[]{"C4"}, "detunes", 5.0),
+                "detunes", "not_array", "detunes must be an array");
+        assertRejectedWith(chord("notes", new Object[]{"C4"}, "detunes", new Object[]{1300.0}),
+                "detunes", "out_of_range", "a detune beyond an octave");
+        assertRejectedWith(chord("frequencies", new Object[]{440.0, 19000.0}, "detunes", new Object[]{0.0, 600.0}),
+                "detunes", "out_of_range", "a detuned chord pitch above the limit");
+        assertAccepted(chord("frequencies", new Object[]{440.0, 19000.0}, "detunes", new Object[]{600.0}),
+                "missing detunes count as zero");
+        assertRejectedWith(chord("notes", new Object[]{"C4"}, "duration", 100, "attack", 10, "decay", 95),
+                "decay", "decay_exceeds_remaining_duration", "chord decay budget");
+        assertRejectedWith(chord("notes", new Object[]{"C4"}, "fmDepth", 1.0, "waveType", 3),
+                "fmDepth", "fm_requires_sine", "chord fm needs a sine carrier");
+
+        // Patterns: root values are inherited and every sounding step is checked on its own.
+        assertAccepted(pattern("filterType", "lowpass", "filterHz", 700.0,
+                "steps", new Object[]{map("note", "C4", "filterHzEnd", 3000.0), map("rest", true)}),
+                "pattern inherits the filter and sweeps it per step");
+        assertRejectedWith(pattern("filterHz", 700.0, "steps", new Object[]{map("note", "C4")}),
+                "filterHz", "filter_type_required", "root cutoff without any filter type");
+        assertAccepted(pattern("filterHz", 700.0, "steps", new Object[]{map("rest", true)}),
+                "rest-only pattern is not checked for sounding rules");
+        assertAccepted(pattern("filterHz", 700.0,
+                "steps", new Object[]{map("note", "C4", "filterType", "highpass")}),
+                "a step supplies the filter type the root lacks");
+        assertRejectedWith(pattern("fmDepth", 2.0,
+                "steps", new Object[]{map("note", "C4"), map("note", "E4", "waveType", 1)}),
+                "fmDepth", "fm_requires_sine", "a step overrides the wave away from sine");
+        assertRejectedWith(pattern("stepDuration", 100, "decay", 80,
+                "steps", new Object[]{map("note", "C4", "attack", 30)}),
+                "decay", "decay_exceeds_remaining_duration", "inherited decay must fit the step");
+        assertAccepted(pattern("sustain", 0.5,
+                "steps", new Object[]{map("note", "C4", "duration", 400, "decay", 100)}),
+                "a step supplies the decay for an inherited sustain");
+        assertRejectedWith(pattern("sustain", 0.5, "steps", new Object[]{map("note", "C4")}),
+                "sustain", "sustain_without_decay", "inherited sustain without any decay");
+        assertAccepted(pattern("detune", -5.0,
+                "steps", new Object[]{map("note", "C4"), map("note", "E4", "detune", 8.0, "fmDepthEnd", 0.0, "fmDepth", 2.0)}),
+                "pattern detune and fm per step");
+        assertRejectedWith(pattern("steps", new Object[]{map("frequency", 19000.0, "detune", 700.0)}),
+                "detune", "out_of_range", "detuned step pitch above the limit");
+        assertRejectedWith(pattern("steps", new Object[]{map("note", "C4", "detunes", new Object[]{1.0})}),
+                "detunes", "unsupported_option", "pattern has no per-note detunes");
+        assertRejectedWith(pattern("detunes", new Object[]{1.0}, "steps", new Object[]{map("note", "C4")}),
+                "detunes", "unsupported_option", "pattern root has no per-note detunes");
     }
 
     private static Map<String, Object> map(Object... entries) {
