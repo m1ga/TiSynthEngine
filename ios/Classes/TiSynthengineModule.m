@@ -10,6 +10,7 @@
 #import <os/lock.h>
 #import <stdatomic.h>
 #import <stdint.h>
+#include "../../shared/synth_core.h"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -105,6 +106,24 @@ typedef struct {
   int bitDepth;
   double wavetable[WAVETABLE_MAX_SAMPLES];
   int wavetableSize;
+
+  // Decay and sustain stages of the envelope
+  int    decaySamples;
+  double sustain;
+
+  // State-variable filter; the cutoff moves from svfHz to svfHzEnd when sweeping
+  SynthFilter svf;
+  bool   svfSweeping;
+  double svfHz;
+  double svfHzEnd;
+  double svfQ;
+
+  // Phase-modulated sine
+  bool   fmActive;
+  double fmRatio;
+  double fmModPhase;
+  double fmDepth;
+  double fmDepthDelta;
 } SynthVoice;
 
 typedef struct {
@@ -125,6 +144,11 @@ typedef struct {
   int bitDepth;
   double wavetable[WAVETABLE_MAX_SAMPLES];
   int wavetableSize;
+  SynthFilter svf;
+  bool fmActive;
+  double fmRatio;
+  double fmModPhase;
+  double fmDepth;
   int totalSamples;
   int samplesRemaining;
 } TailVoice;
@@ -158,6 +182,16 @@ typedef struct {
   double seqFreqs[SEQ_MAX_STEPS];
   int    seqStepCount;
   int    seqStepDurationMs;
+  int    decaySamples;
+  double sustain;
+  int    filterType;
+  double filterHz;
+  double filterHzEnd;
+  double filterQ;
+  double fmRatio;
+  double fmDepth;
+  double fmDepthEnd;
+  bool   hasFmDepthEnd;
 } SynthCommand;
 
 enum {
@@ -407,6 +441,93 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
 }
 
 // ---------------------------------------------------------------------------
+// Expressive controls: decay, sustain, filter, FM and detune. Options are
+// already validated; a step reads its own keys over the values it inherits.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+  NSInteger decayMs;
+  double sustain;
+  int    filterType;
+  double filterHz;
+  double filterHzEnd;
+  double filterQ;
+  double fmRatio;
+  double fmDepth;
+  double fmDepthEnd;
+  BOOL   hasFmDepthEnd;
+  double detune;
+} ExpressiveParams;
+
+static ExpressiveParams ExpressiveDefaults(void)
+{
+  ExpressiveParams p;
+  p.decayMs = 0;
+  p.sustain = 1.0;
+  p.filterType = SYNTH_FILTER_NONE;
+  p.filterHz = 1000.0;
+  p.filterHzEnd = 0.0;
+  p.filterQ = 0.7071;
+  p.fmRatio = 1.0;
+  p.fmDepth = 0.0;
+  p.fmDepthEnd = 0.0;
+  p.hasFmDepthEnd = NO;
+  p.detune = 0.0;
+  return p;
+}
+
+static int FilterTypeFromString(NSString *raw)
+{
+  NSString *value = [[raw stringByTrimmingCharactersInSet:
+                      [NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString];
+  if ([value isEqualToString:@"lowpass"]) return SYNTH_FILTER_LOWPASS;
+  if ([value isEqualToString:@"highpass"]) return SYNTH_FILTER_HIGHPASS;
+  if ([value isEqualToString:@"bandpass"]) return SYNTH_FILTER_BANDPASS;
+  return SYNTH_FILTER_NONE;
+}
+
+static ExpressiveParams ReadExpressiveParams(NSDictionary *options, ExpressiveParams inherited)
+{
+  ExpressiveParams p = inherited;
+  double v = 0.0;
+  if (ParseFiniteDoubleFromAny([options objectForKey:@"decay"], &v)) p.decayMs = (NSInteger)llround(v);
+  if (ParseFiniteDoubleFromAny([options objectForKey:@"sustain"], &v)) p.sustain = v;
+  id filterType = [options objectForKey:@"filterType"];
+  if ([filterType isKindOfClass:[NSString class]]) p.filterType = FilterTypeFromString(filterType);
+  if (ParseFiniteDoubleFromAny([options objectForKey:@"filterHz"], &v)) p.filterHz = v;
+  if (ParseFiniteDoubleFromAny([options objectForKey:@"filterHzEnd"], &v)) p.filterHzEnd = v;
+  if (ParseFiniteDoubleFromAny([options objectForKey:@"filterQ"], &v)) p.filterQ = v;
+  if (ParseFiniteDoubleFromAny([options objectForKey:@"fmRatio"], &v)) p.fmRatio = v;
+  if (ParseFiniteDoubleFromAny([options objectForKey:@"fmDepth"], &v)) p.fmDepth = v;
+  if (ParseFiniteDoubleFromAny([options objectForKey:@"fmDepthEnd"], &v)) {
+    p.fmDepthEnd = v;
+    p.hasFmDepthEnd = YES;
+  }
+  if (ParseFiniteDoubleFromAny([options objectForKey:@"detune"], &v)) p.detune = v;
+  return p;
+}
+
+static void ApplyExpressiveParams(SynthCommand *cmd, const ExpressiveParams *p, double sampleRate)
+{
+  cmd->decaySamples  = MAX(0, MsToSamples((int)p->decayMs, sampleRate));
+  cmd->sustain       = p->sustain;
+  cmd->filterType    = p->filterType;
+  cmd->filterHz      = p->filterHz;
+  cmd->filterHzEnd   = p->filterHzEnd;
+  cmd->filterQ       = p->filterQ;
+  cmd->fmRatio       = p->fmRatio;
+  cmd->fmDepth       = p->fmDepth;
+  cmd->fmDepthEnd    = p->fmDepthEnd;
+  cmd->hasFmDepthEnd = p->hasFmDepthEnd;
+}
+
+static double DetunedFrequency(double frequency, double cents, double maxFrequency)
+{
+  if (cents == 0.0) return frequency;
+  return ClampDouble(frequency * synth_cents_ratio(cents), MIN_FREQUENCY_HZ, maxFrequency);
+}
+
+// ---------------------------------------------------------------------------
 // Module interface
 // ---------------------------------------------------------------------------
 
@@ -435,6 +556,9 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
 
   // Pattern cancellation: incremented each time playPattern is called or shutdown
   _Atomic(uint32_t) patternGeneration;
+
+  // Generation of the pattern whose patternend event is still owed; 0 when none
+  _Atomic(uint32_t) pendingPatternGeneration;
 
   NSMutableSet *warningKeys;
 
@@ -488,6 +612,7 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
   commandProducerLock = OS_UNFAIR_LOCK_INIT;
   atomic_store_explicit(&masterVolume,      1.0, memory_order_relaxed);
   atomic_store_explicit(&patternGeneration, 0, memory_order_relaxed);
+  atomic_store_explicit(&pendingPatternGeneration, 0, memory_order_relaxed);
   atomic_store_explicit(&emergencyStopRequested, false, memory_order_relaxed);
   atomic_store_explicit(&emergencyShutdownRequested, false, memory_order_relaxed);
   if (!observingAudioNotifications) {
@@ -697,6 +822,10 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
     voices[i].pulseWidthDelta = 0.0;
     voices[i].bitDepth      = 0;
     voices[i].wavetableSize = 0;
+    voices[i].decaySamples  = 0;
+    voices[i].sustain       = 1.0;
+    voices[i].svfSweeping   = false;
+    voices[i].fmActive      = false;
     voices[i].seqStepCount  = 0;
     tails[i].isActive       = false;
   }
@@ -758,6 +887,11 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
     memcpy(tail->wavetable, voice->wavetable,
            tail->wavetableSize * sizeof(double));
   }
+  tail->svf = voice->svf;
+  tail->fmActive = voice->fmActive;
+  tail->fmRatio = voice->fmRatio;
+  tail->fmModPhase = voice->fmModPhase;
+  tail->fmDepth = voice->fmDepth;
   tail->totalSamples = MAX(1, fadeSamples);
   tail->samplesRemaining = tail->totalSamples;
 }
@@ -879,6 +1013,31 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
   v->wavetableSize = ClampInt(cmd->wavetableSize, 0, WAVETABLE_MAX_SAMPLES);
   if (v->wavetableSize > 0) {
     memcpy(v->wavetable, cmd->wavetable, v->wavetableSize * sizeof(double));
+  }
+
+  // Decay and sustain
+  v->decaySamples = MAX(0, cmd->decaySamples);
+  v->sustain      = ClampDouble(cmd->sustain, 0.0, 1.0);
+
+  // State-variable filter
+  int filterType = ClampInt(cmd->filterType, SYNTH_FILTER_NONE, SYNTH_FILTER_BANDPASS);
+  synth_filter_init(&v->svf, filterType);
+  v->svfHz       = cmd->filterHz;
+  v->svfHzEnd    = cmd->filterHzEnd;
+  v->svfQ        = cmd->filterQ;
+  v->svfSweeping = filterType != SYNTH_FILTER_NONE
+                 && cmd->filterHzEnd >= SYNTH_FILTER_MIN_HZ && v->totalSamples > 1;
+
+  // Phase modulation, sine carrier only
+  v->fmActive   = (cmd->fmDepth > 0.0 || cmd->hasFmDepthEnd) && v->waveType == 0;
+  v->fmRatio    = cmd->fmRatio;
+  v->fmModPhase = 0.0;
+  v->fmDepth    = ClampDouble(cmd->fmDepth, 0.0, 10.0);
+  if (cmd->hasFmDepthEnd && v->totalSamples > 1) {
+    v->fmDepthDelta = (ClampDouble(cmd->fmDepthEnd, 0.0, 10.0) - v->fmDepth)
+                    / (v->totalSamples - 1);
+  } else {
+    v->fmDepthDelta = 0.0;
   }
 
   // Noise seed
@@ -1116,6 +1275,8 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
             wf = v->heldNoise;
           } else if (v->waveType == 5) {
             wf = RenderWavetable(v->phase, v->wavetable, v->wavetableSize);
+          } else if (v->fmActive) {
+            wf = synth_fm_sine(v->phase - floor(v->phase), v->fmModPhase, v->fmDepth);
           } else {
             wf = RenderPeriodicWave(v->waveType, v->phase, effectivePhaseIncr,
                                     v->pulseWidth);
@@ -1125,19 +1286,21 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
             v->filterState += v->filterAlpha * (wf - v->filterState);
             wf = v->filterState;
           }
-
-          // --- Envelope (smoothstep) ---
-          int samplesRemaining = v->totalSamples - v->samplesPlayed;
-          double envelope = 1.0;
-          if (v->attackSamples > 0 && v->samplesPlayed < v->attackSamples) {
-            int den = MAX(1, v->attackSamples - 1);
-            double x = ClampDouble((double)v->samplesPlayed / (double)den, 0.0, 1.0);
-            envelope = SmoothStep01(x);
-          } else if (v->releaseSamples > 0 && samplesRemaining <= v->releaseSamples) {
-            int den = MAX(1, v->releaseSamples - 1);
-            double x = ClampDouble((double)(samplesRemaining - 1) / (double)den, 0.0, 1.0);
-            envelope = SmoothStep01(x);
+          if (v->svf.type != SYNTH_FILTER_NONE) {
+            if (synth_filter_update_due(v->svfSweeping, v->samplesPlayed)) {
+              double cutoffHz = v->svfSweeping
+                  ? synth_geometric_at(v->svfHz, v->svfHzEnd,
+                                       synth_sweep_progress(v->samplesPlayed, v->totalSamples))
+                  : v->svfHz;
+              synth_filter_set(&v->svf, cutoffHz, v->svfQ, module->engineSampleRate);
+            }
+            wf = synth_filter_process(&v->svf, wf);
           }
+
+          // --- Envelope (smoothstep attack, decay to sustain, release) ---
+          double envelope = synth_envelope(v->samplesPlayed, v->totalSamples,
+                                           v->attackSamples, v->decaySamples,
+                                           v->sustain, v->releaseSamples);
           v->currentEnvelope = envelope;
 
           // --- Voice mix (optional bus protection is applied below) ---
@@ -1148,6 +1311,11 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
           // --- Advance phase ---
           v->phase += effectivePhaseIncr;
           v->phase -= floor(v->phase);
+          if (v->fmActive) {
+            v->fmModPhase += effectivePhaseIncr * v->fmRatio;
+            v->fmModPhase -= floor(v->fmModPhase);
+            v->fmDepth = ClampDouble(v->fmDepth + v->fmDepthDelta, 0.0, 10.0);
+          }
 
           // --- Pitch sweep ---
           if (v->phaseIncrDelta != 0.0) {
@@ -1182,6 +1350,8 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
             wf = tail->heldNoise;
           } else if (tail->waveType == 5) {
             wf = RenderWavetable(tail->phase, tail->wavetable, tail->wavetableSize);
+          } else if (tail->fmActive) {
+            wf = synth_fm_sine(tail->phase - floor(tail->phase), tail->fmModPhase, tail->fmDepth);
           } else {
             wf = RenderPeriodicWave(tail->waveType, tail->phase,
                                     tail->phaseIncrement, tail->pulseWidth);
@@ -1191,6 +1361,7 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
             tail->filterState += tail->filterAlpha * (wf - tail->filterState);
             wf = tail->filterState;
           }
+          wf = synth_filter_process(&tail->svf, wf);
           int denominator = MAX(1, tail->totalSamples - 1);
           double x = ClampDouble((double)(tail->samplesRemaining - 1)
                                  / (double)denominator, 0.0, 1.0);
@@ -1200,6 +1371,10 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
           mixR += sample * tail->rightGain;
           tail->phase += tail->phaseIncrement;
           tail->phase -= floor(tail->phase);
+          if (tail->fmActive) {
+            tail->fmModPhase += tail->phaseIncrement * tail->fmRatio;
+            tail->fmModPhase -= floor(tail->fmModPhase);
+          }
           tail->samplesRemaining--;
           if (tail->samplesRemaining <= 0) tail->isActive = false;
         }
@@ -1454,6 +1629,13 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
   cmd.bitDepth        = (int)bitDepth;
   CopyWaveTableFromOptions(options, NULL, 0, cmd.wavetable, &cmd.wavetableSize);
 
+  ExpressiveParams expressive = ReadExpressiveParams(options, ExpressiveDefaults());
+  ApplyExpressiveParams(&cmd, &expressive, engineSampleRate);
+  cmd.frequency = DetunedFrequency(cmd.frequency, expressive.detune, maxFreq);
+  if (cmd.frequencyEnd > 0.0) {
+    cmd.frequencyEnd = DetunedFrequency(cmd.frequencyEnd, expressive.detune, maxFreq);
+  }
+
   int maxAttackSamples = MAX(0, cmd.durationSamples - 1);
   if (cmd.attackSamples > maxAttackSamples) cmd.attackSamples = maxAttackSamples;
   int maxReleaseSamples = MAX(0, cmd.durationSamples - cmd.attackSamples);
@@ -1509,6 +1691,7 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
   double chordWavetable[WAVETABLE_MAX_SAMPLES] = {0};
   int chordWavetableSize = 0;
   CopyWaveTableFromOptions(options, NULL, 0, chordWavetable, &chordWavetableSize);
+  ExpressiveParams expressive = ReadExpressiveParams(options, ExpressiveDefaults());
 
   if (attackMs >= durationMs) attackMs = MAX(0, durationMs - 1);
   NSInteger maxRelease = MAX(0, durationMs - attackMs);
@@ -1527,10 +1710,21 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
     if ([raw isKindOfClass:[NSArray class]]) pansOverride = (NSArray *)raw;
   }
 
+  // Per-voice detune in cents
+  NSArray *detunes = nil;
+  if ([self containsRawKey:options key:@"detunes"]) {
+    id raw = [options objectForKey:@"detunes"];
+    if ([raw isKindOfClass:[NSArray class]]) detunes = (NSArray *)raw;
+  }
+
   NSInteger count = (NSInteger)freqArr.count;
   SynthCommand chordCommands[ABSOLUTE_MAX_VOICES];
   for (NSInteger i = 0; i < count; i++) {
     double freq = [freqArr[i] doubleValue];
+    if (detunes && i < (NSInteger)detunes.count) {
+      double cents = 0.0;
+      if (ParseFiniteDoubleFromAny(detunes[i], &cents)) freq = DetunedFrequency(freq, cents, maxFreq);
+    }
     double pan  = 0.0;
     if (pansOverride && i < (NSInteger)pansOverride.count) {
       double pv = 0.0;
@@ -1560,6 +1754,7 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
       memcpy(cmd.wavetable, chordWavetable,
              chordWavetableSize * sizeof(double));
     }
+    ApplyExpressiveParams(&cmd, &expressive, engineSampleRate);
 
     chordCommands[i] = cmd;
   }
@@ -1609,6 +1804,11 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
 
   uint32_t generation = atomic_fetch_add_explicit(&patternGeneration, 1,
                                                    memory_order_relaxed) + 1;
+  // The previous pattern, if it had not ended, is replaced by this one.
+  if (atomic_exchange_explicit(&pendingPatternGeneration, generation,
+                               memory_order_acq_rel) != 0) {
+    [self firePatternEnd:NO];
+  }
   double bpm = 120.0;
   double swing = 0.0;
   id bpmObj = [options objectForKey:@"bpm"];
@@ -1682,6 +1882,7 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
                    defaultValue:0 min:0 max:16 out:&globalBitDepth];
   CopyWaveTableFromOptions(options, NULL, 0, globalWavetable,
                            &globalWavetableSize);
+  ExpressiveParams globalExpressive = ReadExpressiveParams(options, ExpressiveDefaults());
 
   dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0);
   double cumulativeMs = 0.0;
@@ -1782,6 +1983,11 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
                       defaultValue:globalPulseWidthEnd min:0.0 max:0.95 out:&pulseWidthEnd];
       [self readOptionalIntegerFrom:step method:@"step" key:@"bitDepth"
                        defaultValue:globalBitDepth min:0 max:16 out:&bitDepth];
+      ExpressiveParams expressive = ReadExpressiveParams(step, globalExpressive);
+      freq = DetunedFrequency(freq, expressive.detune, maxFreq);
+      if (frequencyEnd > 0.0) {
+        frequencyEnd = DetunedFrequency(frequencyEnd, expressive.detune, maxFreq);
+      }
 
       if (attackMs >= dur) attackMs = MAX(0, dur - 1);
       NSInteger maxRel = MAX(0, dur - attackMs);
@@ -1815,6 +2021,7 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
       cmd.bitDepth       = (int)bitDepth;
       CopyWaveTableFromOptions(step, globalWavetable, globalWavetableSize,
                                cmd.wavetable, &cmd.wavetableSize);
+      ApplyExpressiveParams(&cmd, &expressive, engineSampleRate);
 
       double schedMs = cumulativeMs + swingOffsetMs;
       if (schedMs < 0.0) schedMs = 0.0;
@@ -1836,6 +2043,19 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
 
     cumulativeMs += stepMs;
   }
+
+  // The same end instant Android uses: the summed step lengths, rounded up, plus 1 ms.
+  int64_t endDelayNs = ((int64_t)ceil(cumulativeMs) + 1) * 1000000;
+  __weak TiSynthengineModule *endSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, endDelayNs), dispatch_get_main_queue(), ^{
+    TiSynthengineModule *module = endSelf;
+    if (module == nil) return;
+    uint32_t expected = generation;
+    if (atomic_compare_exchange_strong_explicit(&module->pendingPatternGeneration, &expected, 0,
+                                                memory_order_acq_rel, memory_order_relaxed)) {
+      [module fireEvent:@"patternend" withObject:@{ @"completed": @YES }];
+    }
+  });
   return @YES;
 }
 
@@ -1855,8 +2075,9 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
 #pragma unused(args)
   if (audioEngine == nil) return;
 
-  // Cancel any pending pattern dispatches
+  // Cancel any pending pattern dispatches; a closing owner gets no patternend
   atomic_fetch_add_explicit(&patternGeneration, 1, memory_order_relaxed);
+  atomic_store_explicit(&pendingPatternGeneration, 0, memory_order_release);
 
   BOOL dropped = [self enqueueSimpleCommand:CMD_SHUTDOWN];
   if (dropped) {
@@ -1882,6 +2103,16 @@ static double ComputeNoteValueMs(NSString *nv, double quarterMs)
 // ---------------------------------------------------------------------------
 #pragma mark - Private helpers
 // ---------------------------------------------------------------------------
+
+// Delivered on the main queue, like the natural-end event, so listeners always
+// run in the same context.
+- (void)firePatternEnd:(BOOL)completed
+{
+  __weak TiSynthengineModule *weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [weakSelf fireEvent:@"patternend" withObject:@{ @"completed": @(completed) }];
+  });
+}
 
 // Parse "frequencies" or "notes" array from options dict → NSArray of NSNumber
 - (NSArray *)parseFreqArray:(NSDictionary *)options method:(NSString *)method maxFreq:(double)maxFreq

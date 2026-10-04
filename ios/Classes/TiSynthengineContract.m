@@ -17,6 +17,20 @@ static const NSInteger ContractMaxVoices = 32;
 static const NSInteger ContractMaxPatternSteps = 512;
 static const NSInteger ContractMinWavetableSamples = 2;
 static const NSInteger ContractMaxWavetableSamples = 64;
+static const NSInteger ContractDefaultDecay = 0;
+static const NSInteger ContractMaxDecay = 4000;
+static const double ContractDefaultSustain = 1.0;
+static NSString *const ContractDefaultFilterType = @"none";
+static const double ContractDefaultFilterHz = 1000.0;
+static const double ContractMinFilterHz = 20.0;
+static const double ContractDefaultFilterQ = 0.7071;
+static const double ContractMinFilterQ = 0.5;
+static const double ContractMaxFilterQ = 10.0;
+static const double ContractDefaultFmRatio = 1.0;
+static const double ContractMinFmRatio = 0.1;
+static const double ContractMaxFmRatio = 16.0;
+static const double ContractMaxFmDepth = 10.0;
+static const double ContractMaxDetuneCents = 1200.0;
 
 static BOOL HasKey(NSDictionary *options, NSString *key)
 {
@@ -165,6 +179,40 @@ static NSDictionary *RejectUnknownOptions(NSDictionary *options, NSArray *suppor
   return nil;
 }
 
+static NSArray *FilterTypes(void)
+{
+  return @[@"none", @"lowpass", @"highpass", @"bandpass"];
+}
+
+// Index into FilterTypes() (0 means none), or -1 when the name is not allowed.
+static NSInteger FilterTypeIndex(NSString *raw)
+{
+  NSString *value = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  NSArray *types = FilterTypes();
+  for (NSUInteger i = 0; i < types.count; i++) {
+    if ([[types objectAtIndex:i] caseInsensitiveCompare:value] == NSOrderedSame) return (NSInteger)i;
+  }
+  return -1;
+}
+
+static NSDictionary *OptionalFilterType(NSDictionary *options, NSString *key)
+{
+  if (!HasKey(options, key)) return nil;
+  id raw = [options objectForKey:key];
+  if (![raw isKindOfClass:[NSString class]]) return Failure(key, @"not_string", raw);
+  return FilterTypeIndex(raw) >= 0 ? nil : Failure(key, @"unsupported_value", raw);
+}
+
+static NSDictionary *OptionalFilterHzEnd(NSDictionary *options, NSString *key, double maxFrequency)
+{
+  if (!HasKey(options, key)) return nil;
+  id raw = [options objectForKey:key];
+  double value = 0.0;
+  if (!FiniteNumber(raw, &value)) return Failure(key, @"non_numeric_or_non_finite", raw);
+  return value == 0.0 || (value >= ContractMinFilterHz && value <= maxFrequency)
+       ? nil : Failure(key, @"out_of_range", raw);
+}
+
 static NSDictionary *ValidateVoiceOptions(NSDictionary *options, double maxFrequency,
                                           BOOL allowSweep)
 {
@@ -190,6 +238,20 @@ static NSDictionary *ValidateVoiceOptions(NSDictionary *options, double maxFrequ
   if (failure) return failure;
   failure = OptionalBitDepth(options, @"bitDepth");
   if (failure) return failure;
+  failure = OptionalInteger(options, @"decay", 0, ContractMaxDecay);
+  if (failure) return failure;
+  failure = OptionalDouble(options, @"sustain", 0.0, 1.0);
+  if (failure) return failure;
+  failure = OptionalFilterType(options, @"filterType");
+  if (failure) return failure;
+  failure = OptionalDouble(options, @"filterHz", ContractMinFilterHz, maxFrequency);
+  if (failure) return failure;
+  failure = OptionalDouble(options, @"filterQ", ContractMinFilterQ, ContractMaxFilterQ);
+  if (failure) return failure;
+  failure = OptionalDouble(options, @"fmRatio", ContractMinFmRatio, ContractMaxFmRatio);
+  if (failure) return failure;
+  failure = OptionalDouble(options, @"fmDepth", 0.0, ContractMaxFmDepth);
+  if (failure) return failure;
   if (allowSweep) {
     failure = OptionalDouble(options, @"panEnd", -1.0, 1.0);
     if (failure) return failure;
@@ -202,6 +264,12 @@ static NSDictionary *ValidateVoiceOptions(NSDictionary *options, double maxFrequ
     failure = OptionalDouble(options, @"noiseRateEnd", 0.0, maxFrequency);
     if (failure) return failure;
     failure = OptionalPulseWidthEnd(options, @"pulseWidthEnd");
+    if (failure) return failure;
+    failure = OptionalFilterHzEnd(options, @"filterHzEnd", maxFrequency);
+    if (failure) return failure;
+    failure = OptionalDouble(options, @"fmDepthEnd", 0.0, ContractMaxFmDepth);
+    if (failure) return failure;
+    failure = OptionalDouble(options, @"detune", -ContractMaxDetuneCents, ContractMaxDetuneCents);
     if (failure) return failure;
   }
   return nil;
@@ -285,6 +353,65 @@ static NSDictionary *ValidateExplicitEnvelope(NSDictionary *options)
   return nil;
 }
 
+static double NumberValue(NSDictionary *options, NSString *key, double fallback)
+{
+  return HasKey(options, key) ? [[options objectForKey:key] doubleValue] : fallback;
+}
+
+static BOOL FrequencyInRange(double frequency, double maxFrequency)
+{
+  return frequency >= 1.0 && frequency <= maxFrequency;
+}
+
+// Rules that span several keys, evaluated on the effective values of one
+// sounding event (a pattern step already merged over its pattern root).
+static NSDictionary *ValidateExpressiveRules(NSDictionary *eff, NSInteger durationMs)
+{
+  NSInteger decay = IntegerValue(eff, @"decay", ContractDefaultDecay);
+  if (HasKey(eff, @"sustain") && NumberValue(eff, @"sustain", ContractDefaultSustain) < 1.0 && decay == 0) {
+    return Failure(@"sustain", @"sustain_without_decay", [eff objectForKey:@"sustain"]);
+  }
+  if (decay > 0) {
+    NSInteger attack = MIN(IntegerValue(eff, @"attack", ContractDefaultAttack), MAX(0, durationMs - 1));
+    if (attack + decay > durationMs) {
+      return Failure(@"decay", @"decay_exceeds_remaining_duration", [eff objectForKey:@"decay"]);
+    }
+  }
+
+  BOOL filtered = HasKey(eff, @"filterType") && FilterTypeIndex([eff objectForKey:@"filterType"]) > 0;
+  if (!filtered) {
+    for (NSString *key in @[@"filterHz", @"filterHzEnd", @"filterQ"]) {
+      if (HasKey(eff, key)) return Failure(key, @"filter_type_required", [eff objectForKey:key]);
+    }
+  }
+
+  double depth = NumberValue(eff, @"fmDepth", 0.0);
+  BOOL fmActive = depth > 0.0 || HasKey(eff, @"fmDepthEnd");
+  if (fmActive && IntegerValue(eff, @"waveType", 0) != 0) {
+    NSString *key = depth > 0.0 ? @"fmDepth" : @"fmDepthEnd";
+    return Failure(key, @"fm_requires_sine", [eff objectForKey:key]);
+  }
+  if (HasKey(eff, @"fmRatio") && !fmActive) {
+    return Failure(@"fmRatio", @"fm_depth_required", [eff objectForKey:@"fmRatio"]);
+  }
+  return nil;
+}
+
+// Detune must leave the starting pitch, and any sweep target, inside the audible range.
+static NSDictionary *ValidateDetuneRange(NSDictionary *eff, double frequency, double maxFrequency)
+{
+  if (!HasKey(eff, @"detune")) return nil;
+  double cents = NumberValue(eff, @"detune", 0.0);
+  if (cents == 0.0) return nil;
+  double ratio = pow(2.0, cents / 1200.0);
+  BOOL inRange = FrequencyInRange(frequency * ratio, maxFrequency);
+  if (inRange && HasKey(eff, @"frequencyEnd")) {
+    double end = NumberValue(eff, @"frequencyEnd", 0.0);
+    if (end != 0.0) inRange = FrequencyInRange(end * ratio, maxFrequency);
+  }
+  return inRange ? nil : Failure(@"detune", @"out_of_range", [eff objectForKey:@"detune"]);
+}
+
 static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
 {
   if (!HasKey(options, key)) return nil;
@@ -344,7 +471,8 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
     @[@"frequency", @"note", @"duration", @"attack", @"release", @"volume",
       @"waveType", @"pan", @"panEnd", @"frequencyEnd", @"lfoFreq", @"lfoDepth",
       @"noiseRate", @"noiseRateEnd", @"lowPassHz", @"pulseWidth", @"pulseWidthEnd",
-      @"waveTable", @"bitDepth"]);
+      @"waveTable", @"bitDepth", @"decay", @"sustain", @"filterType", @"filterHz",
+      @"filterHzEnd", @"filterQ", @"fmRatio", @"fmDepth", @"fmDepthEnd", @"detune"]);
   if (failure) return failure;
   BOOL hasFrequency = HasKey(options, @"frequency");
   BOOL hasNote = HasKey(options, @"note");
@@ -355,7 +483,14 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
   if (!failure && IntegerValue(options, @"waveType", 0) == 5 && !HasKey(options, @"waveTable")) {
     failure = Failure(@"waveTable", @"missing_required", nil);
   }
-  return failure ?: ValidateExplicitEnvelope(options);
+  if (failure) return failure;
+  failure = ValidateExplicitEnvelope(options);
+  if (failure) return failure;
+  failure = ValidateExpressiveRules(options, IntegerValue(options, @"duration", ContractDefaultDuration));
+  if (failure) return failure;
+  double toneFrequency = hasNote ? StrictNoteFrequency([options objectForKey:@"note"])
+                       : NumberValue(options, @"frequency", ContractDefaultFrequency);
+  return ValidateDetuneRange(options, toneFrequency, maxFrequency);
 }
 
 + (NSDictionary *)validateChord:(NSDictionary *)options maxFrequency:(double)maxFrequency
@@ -363,7 +498,8 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
   NSDictionary *failure = RejectUnknownOptions(options,
     @[@"frequencies", @"notes", @"duration", @"attack", @"release", @"volume",
       @"waveType", @"panSpread", @"pans", @"noiseRate", @"lowPassHz",
-      @"pulseWidth", @"waveTable", @"bitDepth"]);
+      @"pulseWidth", @"waveTable", @"bitDepth", @"decay", @"sustain", @"filterType",
+      @"filterHz", @"filterQ", @"fmRatio", @"fmDepth", @"detunes"]);
   if (failure) return failure;
   BOOL hasFrequencies = HasKey(options, @"frequencies");
   BOOL hasNotes = HasKey(options, @"notes");
@@ -396,7 +532,34 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
       if (failure) return Failure(@"pans", [failure objectForKey:@"reason"], pan);
     }
   }
-  return ValidateExplicitEnvelope(options);
+  failure = ValidateExplicitEnvelope(options);
+  if (failure) return failure;
+
+  NSArray *detunes = nil;
+  if (HasKey(options, @"detunes")) {
+    id rawDetunes = [options objectForKey:@"detunes"];
+    if (![rawDetunes isKindOfClass:[NSArray class]]) return Failure(@"detunes", @"not_array", rawDetunes);
+    detunes = (NSArray *)rawDetunes;
+    if (detunes.count > pitches.count) return Failure(@"detunes", @"too_many_values", @(detunes.count));
+    for (id detune in detunes) {
+      failure = OptionalDouble(@{ @"detune": detune ?: [NSNull null] }, @"detune",
+                               -ContractMaxDetuneCents, ContractMaxDetuneCents);
+      if (failure) return Failure(@"detunes", [failure objectForKey:@"reason"], detune);
+    }
+  }
+
+  failure = ValidateExpressiveRules(options, IntegerValue(options, @"duration", ContractDefaultDuration));
+  if (failure) return failure;
+  for (NSUInteger i = 0; i < detunes.count; i++) {
+    double cents = [[detunes objectAtIndex:i] doubleValue];
+    if (cents == 0.0) continue;
+    double base = hasFrequencies ? [[pitches objectAtIndex:i] doubleValue]
+                                 : StrictNoteFrequency([pitches objectAtIndex:i]);
+    if (!FrequencyInRange(base * pow(2.0, cents / 1200.0), maxFrequency)) {
+      return Failure(@"detunes", @"out_of_range", [detunes objectAtIndex:i]);
+    }
+  }
+  return nil;
 }
 
 + (NSDictionary *)validatePattern:(NSDictionary *)options maxFrequency:(double)maxFrequency
@@ -405,7 +568,9 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
     @[@"steps", @"bpm", @"swing", @"stepDuration", @"noteValue", @"attack",
       @"release", @"volume", @"waveType", @"pan", @"panEnd",
       @"frequencyEnd", @"lfoFreq", @"lfoDepth", @"noiseRate", @"noiseRateEnd",
-      @"lowPassHz", @"pulseWidth", @"pulseWidthEnd", @"waveTable", @"bitDepth"]);
+      @"lowPassHz", @"pulseWidth", @"pulseWidthEnd", @"waveTable", @"bitDepth",
+      @"decay", @"sustain", @"filterType", @"filterHz", @"filterHzEnd", @"filterQ",
+      @"fmRatio", @"fmDepth", @"fmDepthEnd", @"detune"]);
   if (failure) return failure;
   id rawSteps = [options objectForKey:@"steps"];
   if (![rawSteps isKindOfClass:[NSArray class]]) return Failure(@"steps", @"not_array", rawSteps);
@@ -432,7 +597,9 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
       @[@"rest", @"frequency", @"note", @"duration", @"noteValue", @"attack",
         @"release", @"volume", @"waveType", @"pan", @"panEnd", @"frequencyEnd",
         @"lfoFreq", @"lfoDepth", @"noiseRate", @"noiseRateEnd", @"lowPassHz",
-        @"pulseWidth", @"pulseWidthEnd", @"waveTable", @"bitDepth"]);
+        @"pulseWidth", @"pulseWidthEnd", @"waveTable", @"bitDepth",
+        @"decay", @"sustain", @"filterType", @"filterHz", @"filterHzEnd", @"filterQ",
+        @"fmRatio", @"fmDepth", @"fmDepthEnd", @"detune"]);
     if (failure) return failure;
     id restValue = [step objectForKey:@"rest"];
     if (HasKey(step, @"rest") && CFGetTypeID((__bridge CFTypeRef)restValue) != CFBooleanGetTypeID()) {
@@ -456,6 +623,16 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
       return Failure(@"waveTable", @"missing_required", nil);
     }
     if (!rest && (failure = ValidatePatternEnvelope(options, step))) return failure;
+    if (!rest) {
+      NSMutableDictionary *effective = [NSMutableDictionary dictionaryWithDictionary:options];
+      [effective removeObjectForKey:@"steps"];
+      [effective addEntriesFromDictionary:step];
+      NSInteger stepMs = (NSInteger)llround(PatternStepDuration(options, step));
+      if ((failure = ValidateExpressiveRules(effective, stepMs))) return failure;
+      double stepFrequency = hasNote ? StrictNoteFrequency([step objectForKey:@"note"])
+                                     : NumberValue(step, @"frequency", ContractDefaultFrequency);
+      if ((failure = ValidateDetuneRange(effective, stepFrequency, maxFrequency))) return failure;
+    }
   }
   return nil;
 }
@@ -489,7 +666,16 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
       @"panSpread": @0.0,
       @"bpm": @120.0,
       @"swing": @0.0,
-      @"stepDuration": @100.0
+      @"stepDuration": @100.0,
+      @"decay": @(ContractDefaultDecay),
+      @"sustain": @(ContractDefaultSustain),
+      @"filterType": ContractDefaultFilterType,
+      @"filterHz": @(ContractDefaultFilterHz),
+      @"filterHzEnd": @0.0,
+      @"filterQ": @(ContractDefaultFilterQ),
+      @"fmRatio": @(ContractDefaultFmRatio),
+      @"fmDepth": @0.0,
+      @"detune": @0.0
     },
     @"limits": @{
       @"maxVoices": @{ @"min": @1, @"max": @(ContractMaxVoices) },
@@ -511,10 +697,18 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
       @"lfoDepth": @{ @"min": @0.0, @"max": @20000.0 },
       @"bpm": @{ @"min": @20.0, @"max": @300.0 },
       @"swing": @{ @"min": @-0.49, @"max": @0.49 },
-      @"stepDuration": @{ @"min": @1, @"max": @60000 }
+      @"stepDuration": @{ @"min": @1, @"max": @60000 },
+      @"decay": @{ @"min": @0, @"max": @(ContractMaxDecay) },
+      @"sustain": @{ @"min": @0.0, @"max": @1.0 },
+      @"filterHz": @{ @"min": @(ContractMinFilterHz), @"max": @(maxFrequency) },
+      @"filterQ": @{ @"min": @(ContractMinFilterQ), @"max": @(ContractMaxFilterQ) },
+      @"fmRatio": @{ @"min": @(ContractMinFmRatio), @"max": @(ContractMaxFmRatio) },
+      @"fmDepth": @{ @"min": @0.0, @"max": @(ContractMaxFmDepth) },
+      @"detune": @{ @"min": @(-ContractMaxDetuneCents), @"max": @(ContractMaxDetuneCents) }
     },
     @"mixingProfiles": @[@"conservative", @"raw", @"balanced", @"speakerSafe"],
     @"audioSessions": @[@"playback", @"ambient"],
+    @"filterTypes": FilterTypes(),
     @"waveTypes": @{ @"SINE": @0, @"SQUARE": @1, @"SAWTOOTH": @2, @"TRIANGLE": @3, @"NOISE": @4, @"WAVETABLE": @5 }
   };
 }
