@@ -31,4 +31,24 @@ First public release.
   validated against each step's inherited timing.
 - Host-side contract, parity and DSP regressions, an interactive example app,
   and complete API and sound-design documentation.
+- `decay` and `sustain` extend the envelope with a decay stage that settles to
+  a held level before the release. The release scales the level it starts
+  from, so one that begins during the decay stays continuous.
+- A resonant state-variable filter: `filterType` (`lowpass`, `highpass` or
+  `bandpass`), `filterHz`, `filterQ` and an exponential cutoff sweep with
+  `filterHzEnd`. It runs after the one-pole `lowPassHz` filter.
+- Two-operator FM on `SINE` voices: `fmRatio`, `fmDepth` and `fmDepthEnd`. The
+  modulator keeps its ratio through pitch sweeps and vibrato.
+- `detune` in cents on tones and pattern steps, and `detunes` for per-note
+  offsets in a chord.
+- The `patternend` event reports the end of every accepted pattern, with
+  `completed: false` when a newer pattern replaces it.
+- Cross-key validation with the reasons `sustain_without_decay`,
+  `decay_exceeds_remaining_duration`, `filter_type_required`,
+  `fm_requires_sine` and `fm_depth_required`.
+- `getDefaults()` reports the new defaults and limits and a `filterTypes` list.
+- The envelope, filter, sweep, FM and cents math live once in
+  `shared/synth_core.h`, which both renderers include. Host checks cover that
+  core, the Android engine render path and a replayed contract corpus for the
+  iOS contract.
 - Requires Titanium SDK 13.2.0.GA or newer and iOS 15 or newer.

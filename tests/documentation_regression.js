@@ -156,6 +156,32 @@ assert(soundDesign.includes('Noise percussion'), 'noise percussion recipe is pre
 assert(soundDesign.includes('Simon-style cues'), 'Simon-style recipe is present')
 assert(soundDesign.includes('not atomic'), 'independent tone calls are explained')
 assert(soundDesign.includes('pumping'), 'retrigger pumping is explained')
+const expressiveKeys = ['decay', 'sustain', 'filterType', 'filterHz', 'filterHzEnd', 'filterQ',
+  'fmRatio', 'fmDepth', 'fmDepthEnd', 'detune', 'detunes']
+const expressiveReasons = ['sustain_without_decay', 'decay_exceeds_remaining_duration',
+  'filter_type_required', 'fm_requires_sine', 'fm_depth_required']
+const apiDoc = read('documentation/api.md')
+const guideDoc = read('documentation/guide.md')
+const troubleshootingDoc = read('documentation/troubleshooting.md')
+for (const key of expressiveKeys) {
+  assert(apiDoc.includes('`' + key + '`'), `api.md documents ${key}`)
+  assert(allGuides.includes(key + ':'), `a guide shows ${key} in code`)
+}
+for (const reason of expressiveReasons) {
+  assert(apiDoc.includes('`' + reason + '`'), `api.md lists the ${reason} reason`)
+  assert(troubleshootingDoc.includes('`' + reason + '`'), `troubleshooting.md explains ${reason}`)
+}
+assert(apiDoc.includes('filterTypes'), 'getDefaults reports the filter types')
+assert(apiDoc.includes('## `patternend` event') && apiDoc.includes('completed'),
+  'api.md documents the patternend event and its payload')
+assert(readme.includes('patternend') && guideDoc.includes('removeEventListener(\'patternend\'')
+  && troubleshootingDoc.includes('patternend'),
+  'the event is introduced, cleaned up and troubleshot')
+for (const recipe of ['Pluck', 'Electric piano', 'Bell', 'Filtered laser', 'Hi-hat', 'Thick pad', 'Kick']) {
+  assert(soundDesign.includes('### ' + recipe), `sound design has the ${recipe} recipe`)
+}
+assert(read('documentation/audio-engine.md').includes('shared/synth_core.h'),
+  'the shared DSP core is documented')
 assert(!fs.existsSync(path.join(root, 'documentation/migration-3.0.md')),
   'migration document is removed from the public tree')
 assert(!fs.existsSync(path.join(root, 'analisis.md')),
@@ -187,5 +213,11 @@ assert(exampleApp.includes('pans: ['),
   'example demonstrates explicit chord pans')
 assert(exampleApp.includes('{ rest: true, noteValue:'),
   'noise pattern contains an explicit rest')
+for (const key of ['decay:', 'sustain:', 'filterType:', 'filterHzEnd:', 'fmDepthEnd:', 'fmRatio:', 'detunes:']) {
+  assert(exampleApp.includes(key), `example demonstrates ${key}`)
+}
+assert(exampleApp.includes("Synth.addEventListener('patternend'")
+  && exampleApp.includes("Synth.removeEventListener('patternend'"),
+  'example listens for patternend and removes the listener on close')
 
 console.log('documentation_regression: all tests passed')

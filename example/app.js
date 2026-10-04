@@ -708,7 +708,166 @@ sequenceSection.add(Ti.UI.createView({ height: dp(16) }))
 scrollView.add(sequenceSection)
 
 // ---------------------------------------------------------------------------
-// 7. Output controls
+// 7. Expressive synthesis
+// ---------------------------------------------------------------------------
+
+var expressiveSection = makeSection(
+  'Expressive synthesis',
+  'Decay and sustain, a resonant filter, FM and detune.',
+  COLORS.teal
+)
+expressiveSection.add(makeAction({
+  title: 'PLUCK\nTriangle · decay 260 ms · sustain 0.18',
+  color: COLORS.green,
+  pressedColor: COLORS.greenPressed,
+  status: 'Pluck · decay and sustain',
+  onPress: function () {
+    return Synth.playTone({
+      note: 'E4',
+      duration: 900,
+      attack: 2,
+      decay: 260,
+      sustain: 0.18,
+      release: 380,
+      volume: 0.6,
+      waveType: WAVE.TRIANGLE
+    })
+  }
+}))
+expressiveSection.add(makeAction({
+  title: 'WAH\nSawtooth · band-pass 350 → 2400 Hz',
+  color: COLORS.orange,
+  pressedColor: COLORS.orangePressed,
+  status: 'Wah · band-pass cutoff sweep',
+  onPress: function () {
+    return Synth.playTone({
+      note: 'A2',
+      duration: 1000,
+      attack: 10,
+      release: 200,
+      volume: 0.5,
+      waveType: WAVE.SAWTOOTH,
+      filterType: 'bandpass',
+      filterHz: 350,
+      filterHzEnd: 2400,
+      filterQ: 5
+    })
+  }
+}))
+expressiveSection.add(makeAction({
+  title: 'BELL\nFM ratio 3.5 · index 4 → 0',
+  color: COLORS.indigo,
+  pressedColor: COLORS.indigoPressed,
+  status: 'Bell · FM index decays',
+  onPress: function () {
+    return Synth.playTone({
+      note: 'C5',
+      duration: 2600,
+      attack: 1,
+      decay: 2000,
+      sustain: 0.02,
+      release: 500,
+      volume: 0.5,
+      waveType: WAVE.SINE,
+      fmRatio: 3.5,
+      fmDepth: 4,
+      fmDepthEnd: 0
+    })
+  }
+}))
+expressiveSection.add(makeAction({
+  title: 'ELECTRIC PIANO\nFM ratio 1 · index 2.2 → 0.25',
+  color: COLORS.blueDark,
+  pressedColor: COLORS.blue,
+  status: 'Electric piano · FM index mellows',
+  onPress: function () {
+    return Synth.playTone({
+      note: 'E3',
+      duration: 1800,
+      attack: 3,
+      decay: 700,
+      sustain: 0.3,
+      release: 600,
+      volume: 0.55,
+      waveType: WAVE.SINE,
+      fmRatio: 1,
+      fmDepth: 2.2,
+      fmDepthEnd: 0.25
+    })
+  }
+}))
+expressiveSection.add(makeAction({
+  title: 'THICK CHORD\nSix sawtooth voices · detunes ±9 cents',
+  color: COLORS.pink,
+  pressedColor: COLORS.pinkPressed,
+  status: 'Thick chord · detuned voices',
+  onPress: function () {
+    return Synth.playChord({
+      notes: ['A3', 'E4', 'A3', 'E4', 'A3', 'E4'],
+      detunes: [-9, -9, 0, 0, 9, 9],
+      duration: 3200,
+      attack: 700,
+      release: 1300,
+      volume: 0.5,
+      waveType: WAVE.SAWTOOTH,
+      filterType: 'lowpass',
+      filterHz: 1500,
+      panSpread: 0.8
+    })
+  }
+}))
+
+var patternEndLabel = makeText('patternend: no pattern yet', {
+  top: dp(8),
+  left: dp(16),
+  right: dp(16),
+  color: COLORS.textSecondary,
+  fontSize: 12
+})
+
+function onPatternEnd(event) {
+  patternEndLabel.text = event.completed
+    ? 'patternend: completed'
+    : 'patternend: replaced by a newer pattern'
+  setStatus(patternEndLabel.text, event.completed ? COLORS.green : COLORS.yellow)
+}
+
+Synth.addEventListener('patternend', onPatternEnd)
+
+expressiveSection.add(makeAction({
+  title: 'PATTERN END\nTap twice to see completed and replaced',
+  color: COLORS.yellow,
+  pressedColor: COLORS.yellowPressed,
+  textColor: COLORS.canvas,
+  status: 'Pattern running · waiting for patternend',
+  onPress: function () {
+    patternEndLabel.text = 'patternend: pattern running'
+    return Synth.playPattern({
+      bpm: 132,
+      noteValue: '8n',
+      attack: 3,
+      decay: 90,
+      sustain: 0.4,
+      release: 60,
+      volume: 0.55,
+      waveType: WAVE.SQUARE,
+      steps: [
+        { note: 'C5' },
+        { note: 'E5' },
+        { note: 'G5' },
+        { rest: true },
+        { note: 'E5' },
+        { note: 'C5', noteValue: '4n' }
+      ]
+    })
+  }
+}))
+expressiveSection.add(patternEndLabel)
+expressiveSection.add(Ti.UI.createView({ height: dp(16) }))
+scrollView.add(expressiveSection)
+
+// ---------------------------------------------------------------------------
+// 8. Output controls
 // ---------------------------------------------------------------------------
 
 var controlSection = makeSection(
@@ -801,6 +960,7 @@ function hideAndroidActionBar() {
 }
 
 function cleanup() {
+  Synth.removeEventListener('patternend', onPatternEnd)
   win.removeEventListener('postlayout', onFirstPostLayout)
   win.removeEventListener('open', hideAndroidActionBar)
   win.removeEventListener('focus', hideAndroidActionBar)

@@ -6,7 +6,7 @@ The public module id is `ti.synthengine` and the current API version is `1.0.0`.
 
 ## What it is for
 
-TiSynthEngine works well for game and interface feedback, retro effects, alarms, notes, chords, arpeggios and simple noise-based percussion.
+TiSynthEngine works well for game and interface feedback, retro effects, alarms, notes, chords, arpeggios and simple noise-based percussion. Decay and sustain, a resonant filter, FM and detune extend that to plucks, keys, bells and thick pads.
 
 It is a synthesizer, not a sample player. It does not decode `.wav` or `.mp3` files, loop a voice indefinitely, or return handles for individual notes. See [known limits](documentation/recommendations.md#known-limits) before using it for a long-running music or ambience system.
 
@@ -92,7 +92,7 @@ Apps that start ads, remote configuration or entry animations may need a longer 
 
 ## Public methods
 
-The module exposes exactly eight methods.
+The module exposes exactly eight methods and one event, `patternend`.
 
 | Method                 | Returns   | What it does                                                                |
 | ---------------------- | --------- | --------------------------------------------------------------------------- |
@@ -228,6 +228,14 @@ That sound rises for 200 ms, holds for 400 ms and fades for 400 ms.
 
 Explicit envelopes must fit. `attack` must be shorter than `duration`, and `release` cannot exceed the time left after attack. Defaults are shortened when a very short duration needs it, but values supplied by the caller are rejected instead of rewritten.
 
+Add `decay` and `sustain` for sounds that start loud and settle, such as plucks, keys and bells. The level falls from full scale to `sustain` over `decay` milliseconds, then holds until the release:
+
+```javascript
+synth.playTone({ note: 'E4', duration: 900, attack: 2, decay: 260, sustain: 0.18, release: 380 })
+```
+
+`sustain` below 1 needs a `decay`, and `attack` plus `decay` must fit in `duration`.
+
 ## Panning, sweeps and vibrato
 
 `pan` runs from `-1` on the left to `1` on the right. `panEnd` moves the note across the stereo field during its lifetime:
@@ -255,6 +263,37 @@ synth.playTone({
 ```
 
 The [sound design guide](documentation/sound-design.md) explains how these controls change the result and includes tested recipes.
+
+## Filter, FM and detune
+
+`filterType` adds a resonant 12 dB per octave filter: `lowpass`, `highpass` or `bandpass`. `filterQ` sets the resonance and `filterHzEnd` sweeps the cutoff exponentially:
+
+```javascript
+synth.playTone({
+  note: 'A2', duration: 1000, waveType: WAVE.SAWTOOTH,
+  filterType: 'bandpass', filterHz: 350, filterHzEnd: 2400, filterQ: 5
+})
+```
+
+`fmDepth` turns a sine into a two-operator FM voice. `fmRatio` is the modulator frequency as a multiple of the carrier, and `fmDepthEnd` moves the index over the note, so bells and electric pianos start bright and mellow out:
+
+```javascript
+synth.playTone({
+  note: 'C5', duration: 2600, decay: 2000, sustain: 0.02,
+  fmRatio: 3.5, fmDepth: 4, fmDepthEnd: 0
+})
+```
+
+`detune` shifts a pitch in cents. A chord takes `detunes`, one offset per note, so repeated pitches beat and thicken:
+
+```javascript
+synth.playChord({
+  notes: ['A3', 'A3', 'E4', 'E4'], detunes: [-8, 8, -8, 8],
+  duration: 2000, waveType: WAVE.SAWTOOTH
+})
+```
+
+Tones and pattern steps take every one of these keys. Chords take them as fixed values, use `detunes` instead of `detune`, and have no `*End` sweeps. The [API reference](documentation/api.md#expressive-controls) lists the ranges and the rules that tie the keys together.
 
 ## Chords and polyphony
 
@@ -303,6 +342,16 @@ Bare strings and numbers are rejected with `invalid_step_type`. Pattern-level op
 Step length uses step `duration`, step `noteValue`, pattern `noteValue`, pattern `stepDuration`, then the 100 ms default, in that order.
 
 Only one pattern can be pending. Starting a new pattern cancels the future steps of the old one. `stopAll()` releases the notes already sounding but does not cancel future steps. Start a one-step rest or call `shutdown()` to cancel them.
+
+Every accepted pattern ends with one `patternend` event. `completed` is `true` at the natural end and `false` when a newer pattern replaces it. Remove the listener when the owner closes:
+
+```javascript
+function onPatternEnd (event) {
+  if (event.completed) playNextPattern()
+}
+
+synth.addEventListener('patternend', onPatternEnd)
+```
 
 ## Mixing profiles
 
