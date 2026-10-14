@@ -1,10 +1,14 @@
 # Changelog
 
-## [1.0.0] - 2026-09-29
+## [1.0.0] - Unreleased
 
-First public release.
+Beta for the planned first public release.
 
 ### Added
+
+- Add optional front-plane headphone binaural positioning with `spatialX` and `spatialY` on tones, chords and patterns.
+- Share a compact MIT KEMAR HRTF FIR implementation between Android and iOS, including filter history during voice replacement and stopping.
+- Add spatial contract parity and DSP regression coverage; ordinary calls keep stereo panning.
 
 - Native low-latency tone synthesis for Titanium on Android and iOS.
 - Eight public methods: `getDefaults`, `startEngine`, `playTone`, `playChord`,

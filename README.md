@@ -1,8 +1,8 @@
 # TiSynthEngine
 
-TiSynthEngine is a native synthesizer for Titanium apps on Android and iOS. It generates tones, chords, sweeps, noise and timed patterns without bundled audio files.
+TiSynthEngine is a native synthesizer for Titanium apps on Android and iOS. It generates tones, chords, sweeps, noise and timed patterns without bundled audio files. Optional `spatialX` and `spatialY` provide headphone positioning on a front plane; see [binaural positioning](documentation/api.md#binaural-front-plane-positioning).
 
-The public module id is `ti.synthengine` and the current API version is `1.0.0`.
+The public module id is `ti.synthengine` and the current API version is `1.0.0`, an unreleased beta for the planned first public release.
 
 ## What it is for
 

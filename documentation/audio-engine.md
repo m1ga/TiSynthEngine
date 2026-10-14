@@ -336,3 +336,11 @@ clang -fobjc-arc -Wall -Wextra -framework Foundation \
 
 The iOS renderer shares the DSP math through the same header, but nothing
 renders its output on the host, so check it on a device.
+
+## Binaural front-plane renderer
+
+`shared/synth_spatial.h` runs the same allocation-free FIR processor in both native ports, after each voice envelope and before summation/master/limiter. Nine stereo impulse responses from Gardner and Martin's MIT KEMAR measurements form a compact front-plane grid. The complete 128-sample source responses at 44.1 kHz are interpolated across direction and linearly resampled once at voice onset to the output rate. A single front-response energy calibration preserves directional differences. At 48 kHz the convolution uses 140 padded taps per ear. Buffers are reserved with the voice/tail pools; there are no runtime downloads, callback allocations, or additional callback locks.
+
+Spatial voice-steal and stop tails copy the filter history as well as oscillator state. After the source envelope or fade ends, both ports drain the FIR with zero input for `taps - 1` samples before freeing the voice; this preserves even 1 ms events. Ordinary voices bypass the FIR. CPU cost grows with spatial voices, including short replacement tails. A fixed position avoids changing the filter during an event. The intended output-rate range is 8 to 192 kHz. Interpolated generic HRTFs provide directional cues, not guaranteed individual localization.
+
+The shared processor check is `cc -std=c99 -O2 -Wall -Wextra -Wpedantic tests/spatial_regression.c -lm -o /tmp/spatial_regression` followed by `/tmp/spatial_regression`. `tests/spatial_engine_host.cpp` uses the same compile flags as `engine_render_host.cpp` and verifies native left/right rendering, elevation changes, stealing and stopping. Java spatial validation is checked by `SynthSpatialContractRegression`; the common Java/iOS corpus also covers spatial acceptance and conflicts.

@@ -467,3 +467,20 @@ Common reasons include:
 
 Explicit values are not clamped. Read `getDefaults().limits` when accepting
 user input and decide in the app whether to reject or constrain it.
+
+## Binaural front-plane positioning
+
+`playTone`, `playChord` and `playPattern` (root and steps) accept `spatialX` and `spatialY`, finite numbers from -1 to 1. Supplying either enables headphone binaural processing for that event; the omitted coordinate is 0. Coordinates are fixed for the event. `spatialX: -1` is left, `1` is right, `spatialY: -1` is below, and `1` is above. The center is in front of the listener. The grid spans approximately 60 degrees horizontally and 40 degrees vertically, with interpolated diagonals. A chord shares one position across its voices; each voice is filtered separately.
+
+Spatial coordinates cannot be combined with `pan`, `panEnd`, `pans` or `panSpread`, including conflicting fields inherited by a pattern step. Such calls return `false` with `conflicting_spatial_fields`. Omitting both spatial coordinates keeps the stereo renderer. The coordinate limits in `getDefaults().limits` can be used to detect support without starting the engine.
+
+```javascript
+var accepted = synth.playTone({
+  frequency: 90, waveType: WAVE.NOISE,
+  duration: 500, attack: 2, release: 200, volume: 0.3,
+  spatialX: 0.6, spatialY: 0.8
+})
+if (!accepted) Ti.API.warn('Spatial explosion rejected')
+```
+
+Listen with stereo headphones. Height perception depends on the listener, headphones and sound spectrum; a low sine tone is a weak test of elevation. This version models a front plane without rear sources, distance attenuation, room reflections or head tracking. The output remains two channels. Filter positions do not follow objects automatically; submit later events at their updated coordinates.
