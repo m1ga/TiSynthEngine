@@ -30,6 +30,7 @@ Common fixes:
 | `filter_type_required` | Set `filterType` to a filter, or remove `filterHz`, `filterHzEnd` and `filterQ`. |
 | `fm_requires_sine` | Use `SINE` for FM, or set `fmDepth` to 0 and remove `fmDepthEnd`. |
 | `fm_depth_required` | Set `fmDepth` or `fmDepthEnd`, or remove `fmRatio`. |
+| `conflicting_spatial_fields` | Remove `pan`, `panEnd`, `pans` and `panSpread` whenever sending `spatialX` or `spatialY`; check pattern root and steps. |
 | `too_many_values` | Pass no more `pans` or `detunes` than the chord has pitches. |
 | `missing_required` with `waveTable` | Add a table whenever `waveType` is `WAVETABLE`. |
 | envelope reason | Make attack and release fit inside total duration. |
@@ -74,6 +75,22 @@ build. The module directories should be:
 modules/android/ti.synthengine/1.0.0/
 modules/iphone/ti.synthengine/1.0.0/
 ```
+
+For binaural, also inspect `getDefaults().limits.spatialX` and `.spatialY`. During the unreleased beta, two binaries can both report 1.0.0 while only one includes positioning. Copying the package does not update an already installed app: rebuild and reinstall it.
+
+## Binaural does not change the position
+
+Check the actual object sent to the native method, not only the settings screen:
+
+- Every effect that should be spatial sends `spatialX` and/or `spatialY`. A switch alone does not modify existing playback calls.
+- Values are finite numbers within -1 to 1, with positive Y above and negative Y below. A 0 to 100% height slider scales the source position; it does not put all sounds above.
+- Turning binaural off removes both coordinate keys. Sending zeros leaves binaural enabled at the front center.
+- No stereo placement fields remain, even with value 0 or through pattern inheritance. Handle the Boolean return value.
+- The installed contract reports both spatial limits and the device has the rebuilt app.
+- Use headphones and one broadband event at a time; with binaural off, points with the same X use the same horizontal placement regardless of Y.
+- Positions are fixed for active voices. Later calls can use updated coordinates, but there is no method to move a voice already playing.
+
+The [integration guide](guide.md#integrate-binaural-in-a-2d-app) contains the JavaScript conversion and explains switch/slider behavior.
 
 ## The first sound glitches
 

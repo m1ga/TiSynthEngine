@@ -1,6 +1,6 @@
 # TiSynthEngine
 
-TiSynthEngine is a native synthesizer for Titanium apps on Android and iOS. It generates tones, chords, sweeps, noise and timed patterns without bundled audio files. Optional `spatialX` and `spatialY` provide headphone positioning on a front plane; see [binaural positioning](documentation/api.md#binaural-front-plane-positioning).
+TiSynthEngine is a native synthesizer for Titanium apps on Android and iOS. It generates tones, chords, sweeps, noise and timed patterns without bundled audio files. Optional `spatialX` and `spatialY` provide headphone positioning on a front plane; see [binaural positioning](documentation/api.md#binaural-front-plane-positioning) and [app integration](documentation/guide.md#integrate-binaural-in-a-2d-app).
 
 The public module id is `ti.synthengine` and the current API version is `1.0.0`, an unreleased beta for the planned first public release.
 
@@ -20,7 +20,7 @@ It is a synthesizer, not a sample player. It does not decode `.wav` or `.mp3` fi
 
 ## Install
 
-Download both archives from the [latest release](https://github.com/macCesar/TiSynthEngine/releases/latest) and copy them into the root of the Titanium app:
+For the unreleased beta, use both packages built from the current source in `android/dist` and `ios/dist`, then copy them into the Titanium app root. The [latest release](https://github.com/macCesar/TiSynthEngine/releases/latest) is a separate snapshot; copying new source does not update its packages:
 
 - `ti.synthengine-android-1.0.0.zip`
 - `ti.synthengine-iphone-1.0.0.zip`

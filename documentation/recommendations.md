@@ -156,6 +156,10 @@ Exercise the real worst case:
 An underrun counter only describes transport. A clean counter cannot tell you
 whether a waveform, pitch or mix is pleasant.
 
+## Binaural placement
+
+Use the [integration guide](guide.md#integrate-binaural-in-a-2d-app) to convert each effect source into signed spatial coordinates. Keep switch and amplitude percentages in the app, enable the controls only when both spatial limits are present, and test with headphones. Count concurrently spatial voices and replacement tails when measuring CPU.
+
 ## Known limits
 
 - There are no per-voice handles. A single active note cannot be edited or
@@ -170,6 +174,7 @@ whether a waveform, pitch or mix is pleasant.
 - `lowPassHz` is a plain one-pole filter. The resonant filter has fixed 12 dB
   per octave and one exponential sweep; there is no filter envelope.
 - FM has one modulator and works only on `SINE`.
+- Binaural positions are fixed per event on a front plane; there is no per-voice movement, rear positioning, distance attenuation or head tracking. Output is two channels, without a multichannel 2.1/5.1 routing API.
 - There is no effects bus: no reverb, delay or chorus.
 - The module provides generic synthesis primitives, not cycle-accurate hardware
   emulation.

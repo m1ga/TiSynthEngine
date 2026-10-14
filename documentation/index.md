@@ -11,6 +11,7 @@ the most common options.
 ## Guides
 
 - [Guide](guide.md): installation, startup, cleanup and day-to-day use.
+- [Binaural app integration](guide.md#integrate-binaural-in-a-2d-app): per-effect coordinates, switches, amplitude sliders and stereo fallback.
 - [API reference](api.md): every public method, option, default and limit.
 - [Sound design](sound-design.md): synthesis basics, filters, FM and recipes.
 - [Examples](examples.md): complete snippets for tones, chords and patterns.

@@ -267,8 +267,7 @@ synth.playPattern({
 })
 ```
 
-Positive swing lengthens one step and shortens the next. Negative swing flips
-that relationship. Keep it subtle unless the lurch is the intended effect.
+Swing offsets scheduled starts without changing voice durations: positive swing delays even steps and advances odd steps (zero-based); negative swing reverses those offsets. Each offset is the swing value times that step's duration, and a start before the call time is clamped to zero. This can overlap voices. Keep it subtle unless the lurch is the intended effect.
 
 ## Millisecond pattern
 
@@ -661,3 +660,25 @@ synth.shutdown()
 `shutdown()` cancels the scheduler and releases the native stream.
 
 The complete interactive demo is in [`example/app.js`](../example/app.js).
+
+## Positioned headphone effect
+
+Check the installed coordinate limits and keep the engine running. This JavaScript places one generated noise effect above and to the right; it does not change other sound calls:
+
+```javascript
+if (!contract.limits.spatialX || !contract.limits.spatialY) {
+  throw new Error('This installed module does not report binaural support')
+}
+if (!synth.playTone({
+  frequency: 90,
+  waveType: WAVE.NOISE,
+  duration: 500,
+  attack: 2,
+  release: 200,
+  volume: 0.3,
+  spatialX: 0.8,
+  spatialY: 0.75
+})) Ti.API.warn('Positioned effect rejected')
+```
+
+For app switches, amplitude sliders, all nine screen positions and routing multiple effects through one service, use the [binaural integration guide](guide.md#integrate-binaural-in-a-2d-app). Omitting both coordinates disables binaural for that event; setting both to zero keeps it enabled at the front center.
