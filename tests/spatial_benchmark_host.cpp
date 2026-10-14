@@ -59,7 +59,7 @@ int main() {
       double peak = std::max(std::fabs(block[2*i]), std::fabs(block[2*i+1]));
       if (!std::isfinite(block[2*i]) || !std::isfinite(block[2*i+1])) nonFinite++;
       maxPeak = std::max(maxPeak, peak);
-  
+
       if (peak >= 0.99999) clipped++;
     }
     minGain = std::min(minGain, rig.e().limiterGain_);
