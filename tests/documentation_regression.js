@@ -220,4 +220,126 @@ assert(exampleApp.includes("Synth.addEventListener('patternend'")
   && exampleApp.includes("Synth.removeEventListener('patternend'"),
   'example listens for patternend and removes the listener on close')
 
+
+// Compare method tables with the native allowlists, not just mentions elsewhere.
+const nativeContract = read('android/src/ti/synthengine/SynthContract.java')
+const nativeModule = read('android/src/ti/synthengine/TiSynthEngineModule.java')
+const nativeIosContract = read('ios/Classes/TiSynthengineContract.m')
+function documentedKeys (section) {
+  const keys = []
+  for (const row of section.split('\n').filter(line => line.startsWith('|'))) {
+    for (const match of row.split('|')[1].matchAll(/`([^`]+)`/g)) {
+      keys.push(...match[1].split(',').map(key => key.trim()))
+    }
+  }
+  return [...new Set(keys)].sort()
+}
+function nativeIosKeys (method, target) {
+  const source = nativeIosContract.split('validate' + method + ':')[1]
+  assert(source, 'iOS validator exists: ' + method)
+  const list = source.match(new RegExp('RejectUnknownOptions\\(' + target + ',\\s*@\\[([\\s\\S]*?)\\]\\)'))
+  assert(list, 'iOS allowlist exists: ' + method + '/' + target)
+  return [...new Set([...list[1].matchAll(/@"(\w+)"/g)].map(match => match[1]))].sort()
+}
+function nativeKeys (method, target) {
+  const source = nativeContract.split('static Validation validate' + method + '(')[1]
+  assert(source, 'native validator exists: ' + method)
+  const list = source.match(new RegExp('rejectUnknownOptions\\(' + target + ',([\\s\\S]*?)\\);'))
+  assert(list, 'native allowlist exists: ' + method + '/' + target)
+  return [...new Set([...list[1].matchAll(/"(\w+)"/g)].map(match => match[1]))].sort()
+}
+for (const [method, validator] of [['startEngine', 'StartEngine'], ['playTone', 'Tone'],
+  ['playChord', 'Chord'], ['playPattern', 'Pattern'], ['setVolume', 'SetVolume']]) {
+  const section = apiDoc.split('## `' + method + '(options)`')[1].split('\n## ')[0]
+  const rootTable = method === 'playPattern' ? section.split('Step keys:')[0] : section
+  assert.deepStrictEqual(documentedKeys(rootTable), nativeKeys(validator, 'options'),
+    method + ' table covers exactly the native options')
+  assert.deepStrictEqual(documentedKeys(rootTable), nativeIosKeys(validator, 'options'),
+    method + ' table covers exactly the iOS options')
+  if (method === 'playPattern') {
+    assert.deepStrictEqual(documentedKeys(section.split('Step keys:')[1]), nativeKeys('Pattern', 'step'),
+      'pattern step table covers exactly the native options')
+    assert.deepStrictEqual(documentedKeys(section.split('Step keys:')[1]), nativeIosKeys('Pattern', 'step'),
+      'pattern step table covers exactly the iOS options')
+  }
+}
+const defaultObject = apiDoc.split('The result has this shape:')[1].match(/```javascript\s*\n([\s\S]*?)```/)[1]
+const reported = vm.runInNewContext('(' + defaultObject + ')')
+const nativeDefaultKeys = [...nativeModule.matchAll(/defaults\.put\("(\w+)"/g)].map(match => match[1]).sort()
+assert.deepStrictEqual(Object.keys(reported.defaults).sort(), nativeDefaultKeys,
+  'getDefaults example contains every native default')
+const limitTable = apiDoc.split('## Limits')[1].split('\n## ')[0]
+const nativeLimitKeys = [...nativeModule.matchAll(/limits\.put\("(\w+)"/g)].map(match => match[1])
+for (const key of nativeLimitKeys) {
+  assert(limitTable.includes('`' + key + '`') || documentedKeys(limitTable).includes(key),
+    'limits table identifies getDefaults().limits.' + key)
+}
+
+
+const nativeConstants = new Map()
+for (const [prefix, source] of [['SynthContract.', nativeContract], ['', nativeModule]]) {
+  for (const match of source.matchAll(/static final (?:int|double|String)\s+(\w+)\s*=\s*([^;]+);/g)) {
+    nativeConstants.set(prefix + match[1], match[2].trim())
+  }
+}
+function nativeDefaultValue (expression) {
+  if (expression === 'new Object[]{}') return []
+  if (/^".*"$/.test(expression)) return JSON.parse(expression)
+  if (/^-?[\d.]+$/.test(expression)) return Number(expression)
+  const key = expression
+  assert(nativeConstants.has(key), 'resolve native default ' + key)
+  return nativeDefaultValue(nativeConstants.get(key))
+}
+for (const match of nativeModule.matchAll(/defaults\.put\("(\w+)",\s*([^;]+)\);/g)) {
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(reported.defaults[match[1]])), nativeDefaultValue(match[2].trim()),
+    'getDefaults example has the native value of ' + match[1])
+}
+
+// Execute the integration example; syntax alone cannot catch reversed Y or
+// accidentally leaving binaural fields present when the app switch is off.
+const integration = guideDoc.split('## Integrate binaural in a 2D app')[1]
+assert(integration, 'the app integration guide exists')
+const placementExample = [...integration.matchAll(/```javascript\s*\n([\s\S]*?)```/g)]
+  .find(match => match[1].includes('function playPositionedTone'))[1]
+const requests = []
+const sandbox = {
+  supportsBinaural: true,
+  contract: { waveTypes: { NOISE: 4 } },
+  synth: { playTone: options => { requests.push(JSON.parse(JSON.stringify(options))); return true } },
+  Ti: { API: { warn: () => {} } }
+}
+vm.runInNewContext(placementExample, sandbox)
+sandbox.audioSettings.horizontalPercent = 100
+const originalRecipe = { frequency: 880, duration: 400, pan: 0, panEnd: 0 }
+for (const [x, y, expectedX, expectedY] of [[0, 0, -1, 1], [500, 0, 0, 1], [1000, 0, 1, 1],
+  [0, 400, -1, 0], [500, 400, 0, 0], [1000, 400, 1, 0],
+  [0, 800, -1, -1], [500, 800, 0, -1], [1000, 800, 1, -1]]) {
+  sandbox.playPositionedTone(originalRecipe, x, y, 1000, 800)
+  const options = requests.at(-1)
+  assert.strictEqual(options.spatialX, expectedX)
+  assert.strictEqual(options.spatialY, expectedY)
+  assert(!('pan' in options) && !('panEnd' in options), 'binaural removes stereo fields')
+}
+assert.deepStrictEqual(originalRecipe, { frequency: 880, duration: 400, pan: 0, panEnd: 0 },
+  'placement preserves the synthesis recipe')
+sandbox.audioSettings.heightPercent = 0
+sandbox.playPositionedTone(originalRecipe, 1000, 800, 1000, 800)
+assert.strictEqual(Math.abs(requests.at(-1).spatialY), 0, 'zero height centers binaural elevation')
+assert('spatialX' in requests.at(-1), 'zero height does not disable binaural')
+sandbox.audioSettings.horizontalPercent = 50
+sandbox.playPositionedTone(originalRecipe, 1000, 400, 1000, 800)
+assert.strictEqual(requests.at(-1).spatialX, 0.5, 'horizontal slider scales direction')
+sandbox.audioSettings.binaural = false
+sandbox.playPositionedTone(originalRecipe, 1000, 0, 1000, 800)
+assert.strictEqual(requests.at(-1).pan, 0.5)
+assert(!('spatialX' in requests.at(-1)) && !('spatialY' in requests.at(-1)),
+  'the off switch omits coordinates')
+sandbox.audioSettings.binaural = true
+sandbox.supportsBinaural = false
+sandbox.playPositionedTone(originalRecipe, 1000, 800, 1000, 800)
+assert.strictEqual(requests.at(-1).pan, 0.5, 'a module without spatial support uses stereo')
+assert(!('spatialY' in requests.at(-1)))
+assert.throws(() => sandbox.playPositionedTone(originalRecipe, 0, 0, 0, 800),
+  /positive dimensions/, 'invalid arena dimensions are rejected')
+
 console.log('documentation_regression: all tests passed')
