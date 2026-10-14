@@ -28,3 +28,5 @@ The archive supports device, simulator and Mac Catalyst builds.
 
 Build the distributable module with the Titanium CLI from `ios/`. The expected
 archive is `dist/ti.synthengine-iphone-1.0.0.zip`.
+
+Binaural HRTF data: copyright 1994 MIT Media Laboratory, measured by Bill Gardner and Keith Martin. Use is permitted with attribution. See [MIT KEMAR](https://sound.media.mit.edu/resources/KEMAR.html) and the module's third-party notices.

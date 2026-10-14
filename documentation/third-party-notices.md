@@ -210,3 +210,9 @@ Copyright The Android Open Source Project
    See the License for the specific language governing permissions and
    limitations under the License.
 ```
+
+## MIT KEMAR HRTF measurements
+
+The binaural renderer on Android and iOS embeds a subset of the compact KEMAR head-related impulse responses measured by Bill Gardner and Keith Martin, MIT Media Laboratory, in 1994. Data copyright: 1994 MIT Media Laboratory. MIT permits use without restrictions provided the authors are cited in research or commercial applications. These measurements have their own terms; the module's MIT code license does not replace the data attribution requirement.
+
+Original archive and terms: [MIT KEMAR measurements](https://sound.media.mit.edu/resources/KEMAR.html) and [archive README](https://sound.media.mit.edu/resources/KEMAR/README). `tools/generate_spatial_data.py` reproducibly extracts the front-plane grid from `compact.zip`; `shared/synth_hrtf_data.h` records the archive SHA-256 and exact source files. The generated grid mirrors the positive azimuth responses for left-side sources and retains all 128 source samples per ear.

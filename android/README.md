@@ -49,3 +49,5 @@ java -cp "$test_dir" ti.synthengine.SynthDspRegression
 
 Build the distributable module with the Titanium CLI from `android/`. The
 expected archive is `dist/ti.synthengine-android-1.0.0.zip`.
+
+Binaural HRTF data: copyright 1994 MIT Media Laboratory, measured by Bill Gardner and Keith Martin. Use is permitted with attribution. See [MIT KEMAR](https://sound.media.mit.edu/resources/KEMAR.html) and the module's third-party notices.
