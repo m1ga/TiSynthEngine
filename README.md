@@ -390,6 +390,10 @@ Connecting or disconnecting an output may cut the note crossing the hardware tra
 
 The [Android notes](android/README.md), [iOS notes](ios/README.md) and [audio engine guide](documentation/audio-engine.md#regression-coverage) contain the build and host-test commands.
 
+## Planned work
+
+See [the to-do list](TODO.md), including the proposed MIDI file reader/converter.
+
 ## License
 
 MIT. See [LICENSE](LICENSE). The Android module bundles Oboe under the Apache License 2.0; see [third-party notices](documentation/third-party-notices.md).
