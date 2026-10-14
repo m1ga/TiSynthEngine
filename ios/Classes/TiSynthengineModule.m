@@ -11,6 +11,7 @@
 #import <stdatomic.h>
 #import <stdint.h>
 #include "../../shared/synth_core.h"
+#include "../../shared/synth_spatial.h"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -60,6 +61,9 @@
 
 typedef struct {
   bool   isActive;
+  bool spatial;
+  SynthSpatial spatialState;
+  int spatialDrain;
   double phase;
   double phaseIncrement;
   double phaseIncrDelta;
@@ -128,6 +132,9 @@ typedef struct {
 
 typedef struct {
   bool isActive;
+  bool spatial;
+  SynthSpatial spatialState;
+  int spatialDrain;
   double phase;
   double phaseIncrement;
   double volume;
@@ -159,6 +166,8 @@ typedef struct {
 
 typedef struct {
   int    type;
+  BOOL spatial;
+  double spatialX, spatialY;
   double frequency;
   int    durationSamples;
   int    attackSamples;
@@ -457,6 +466,8 @@ typedef struct {
   double fmDepthEnd;
   BOOL   hasFmDepthEnd;
   double detune;
+  BOOL spatial;
+  double spatialX, spatialY;
 } ExpressiveParams;
 
 static ExpressiveParams ExpressiveDefaults(void)
@@ -473,6 +484,7 @@ static ExpressiveParams ExpressiveDefaults(void)
   p.fmDepthEnd = 0.0;
   p.hasFmDepthEnd = NO;
   p.detune = 0.0;
+  p.spatial = NO; p.spatialX = p.spatialY = 0.0;
   return p;
 }
 
@@ -490,6 +502,8 @@ static ExpressiveParams ReadExpressiveParams(NSDictionary *options, ExpressivePa
 {
   ExpressiveParams p = inherited;
   double v = 0.0;
+  if (ParseFiniteDoubleFromAny([options objectForKey:@"spatialX"], &v)) { p.spatialX = v; p.spatial = YES; }
+  if (ParseFiniteDoubleFromAny([options objectForKey:@"spatialY"], &v)) { p.spatialY = v; p.spatial = YES; }
   if (ParseFiniteDoubleFromAny([options objectForKey:@"decay"], &v)) p.decayMs = (NSInteger)llround(v);
   if (ParseFiniteDoubleFromAny([options objectForKey:@"sustain"], &v)) p.sustain = v;
   id filterType = [options objectForKey:@"filterType"];
@@ -519,6 +533,8 @@ static void ApplyExpressiveParams(SynthCommand *cmd, const ExpressiveParams *p, 
   cmd->fmDepth       = p->fmDepth;
   cmd->fmDepthEnd    = p->fmDepthEnd;
   cmd->hasFmDepthEnd = p->hasFmDepthEnd;
+  cmd->spatial = p->spatial;
+  cmd->spatialX = p->spatialX; cmd->spatialY = p->spatialY;
 }
 
 static double DetunedFrequency(double frequency, double cents, double maxFrequency)
@@ -868,6 +884,11 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 {
   TailVoice *tail = [self findTailSlot];
   tail->isActive = true;
+  tail->spatial = voice->spatial;
+  if (tail->spatial) {
+    tail->spatialState = voice->spatialState;
+    tail->spatialDrain = tail->spatialState.taps - 1;
+  }
   tail->phase = voice->phase;
   tail->phaseIncrement = ClampDouble(voice->phaseIncrement, -0.45, 0.45);
   tail->volume = voice->volume * ClampDouble(voice->currentEnvelope, 0.0, 1.0);
@@ -928,6 +949,11 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   if (v->isActive) [self snapshotTailFromVoice:v fadeSamples:stealFadeSamples];
 
   v->isActive       = true;
+  v->spatial = cmd->spatial;
+  if (v->spatial) {
+    synth_spatial_init(&v->spatialState, cmd->spatialX, cmd->spatialY, engineSampleRate);
+    v->spatialDrain = v->spatialState.taps - 1;
+  }
   v->phase          = 0.0;
   v->totalSamples   = MAX(1, cmd->durationSamples);
   v->samplesPlayed  = 0;
@@ -1243,6 +1269,13 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
         for (int i = 0; i < module->engineMaxVoices; i++) {
           SynthVoice *v = &module->voices[i];
           if (!v->isActive) continue;
+          if (v->spatial && v->samplesPlayed >= v->totalSamples) {
+            float l, r;
+            synth_spatial_process(&v->spatialState, 0, &l, &r);
+            mixL += l; mixR += r;
+            if (--v->spatialDrain <= 0) v->isActive = false;
+            continue;
+          }
 
           // --- Sequencer step advance ---
           if (v->seqStepCount > 0) {
@@ -1305,8 +1338,14 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 
           // --- Voice mix (optional bus protection is applied below) ---
           double sample = wf * envelope * v->volume;
-          mixL += sample * v->leftGain;
-          mixR += sample * v->rightGain;
+          if (v->spatial) {
+            float spatialL, spatialR;
+            synth_spatial_process(&v->spatialState, (float)sample, &spatialL, &spatialR);
+            mixL += spatialL; mixR += spatialR;
+          } else {
+            mixL += sample * v->leftGain;
+            mixR += sample * v->rightGain;
+          }
 
           // --- Advance phase ---
           v->phase += effectivePhaseIncr;
@@ -1333,13 +1372,21 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
           // --- Advance sample counter ---
           v->samplesPlayed++;
           if (v->samplesPlayed >= v->totalSamples) {
-            v->isActive = false;
+            if (v->spatial) v->currentEnvelope = 0;
+            else v->isActive = false;
           }
         }
 
         for (int i = 0; i < module->engineMaxVoices; i++) {
           TailVoice *tail = &module->tails[i];
           if (!tail->isActive) continue;
+          if (tail->spatial && tail->samplesRemaining <= 0) {
+            float l, r;
+            synth_spatial_process(&tail->spatialState, 0, &l, &r);
+            mixL += l; mixR += r;
+            if (--tail->spatialDrain <= 0) tail->isActive = false;
+            continue;
+          }
           double wf = 0.0;
           if (tail->waveType == 4) {
             tail->noisePhase += tail->noisePhaseIncrement;
@@ -1367,8 +1414,14 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
                                  / (double)denominator, 0.0, 1.0);
           double tailEnvelope = SmoothStep01(x);
           double sample = wf * tail->volume * tailEnvelope;
-          mixL += sample * tail->leftGain;
-          mixR += sample * tail->rightGain;
+          if (tail->spatial) {
+            float spatialL, spatialR;
+            synth_spatial_process(&tail->spatialState, (float)sample, &spatialL, &spatialR);
+            mixL += spatialL; mixR += spatialR;
+          } else {
+            mixL += sample * tail->leftGain;
+            mixR += sample * tail->rightGain;
+          }
           tail->phase += tail->phaseIncrement;
           tail->phase -= floor(tail->phase);
           if (tail->fmActive) {
@@ -1376,7 +1429,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
             tail->fmModPhase -= floor(tail->fmModPhase);
           }
           tail->samplesRemaining--;
-          if (tail->samplesRemaining <= 0) tail->isActive = false;
+          if (tail->samplesRemaining <= 0 && !tail->spatial) tail->isActive = false;
         }
 
         // --- Stereo-linked lookahead peak limiter ---

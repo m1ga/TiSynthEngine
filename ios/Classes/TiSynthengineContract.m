@@ -213,10 +213,26 @@ static NSDictionary *OptionalFilterHzEnd(NSDictionary *options, NSString *key, d
        ? nil : Failure(key, @"out_of_range", raw);
 }
 
+static NSDictionary *ValidateSpatial(NSDictionary *options)
+{
+  NSDictionary *failure = OptionalDouble(options, @"spatialX", -1.0, 1.0);
+  if (failure) return failure;
+  failure = OptionalDouble(options, @"spatialY", -1.0, 1.0);
+  if (failure) return failure;
+  if ([options objectForKey:@"spatialX"] || [options objectForKey:@"spatialY"]) {
+    for (NSString *key in @[@"pan", @"panEnd", @"pans", @"panSpread"]) {
+      if ([options objectForKey:key]) return Failure(key, @"conflicting_spatial_fields", [options objectForKey:key]);
+    }
+  }
+  return nil;
+}
+
 static NSDictionary *ValidateVoiceOptions(NSDictionary *options, double maxFrequency,
                                           BOOL allowSweep)
 {
-  NSDictionary *failure = OptionalInteger(options, @"duration", 1, 60000);
+  NSDictionary *failure = ValidateSpatial(options);
+  if (failure) return failure;
+  failure = OptionalInteger(options, @"duration", 1, 60000);
   if (failure) return failure;
   failure = OptionalInteger(options, @"attack", 0, 2000);
   if (failure) return failure;
@@ -472,7 +488,7 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
       @"waveType", @"pan", @"panEnd", @"frequencyEnd", @"lfoFreq", @"lfoDepth",
       @"noiseRate", @"noiseRateEnd", @"lowPassHz", @"pulseWidth", @"pulseWidthEnd",
       @"waveTable", @"bitDepth", @"decay", @"sustain", @"filterType", @"filterHz",
-      @"filterHzEnd", @"filterQ", @"fmRatio", @"fmDepth", @"fmDepthEnd", @"detune"]);
+      @"filterHzEnd", @"filterQ", @"fmRatio", @"fmDepth", @"fmDepthEnd", @"detune", @"spatialX", @"spatialY"]);
   if (failure) return failure;
   BOOL hasFrequency = HasKey(options, @"frequency");
   BOOL hasNote = HasKey(options, @"note");
@@ -499,7 +515,7 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
     @[@"frequencies", @"notes", @"duration", @"attack", @"release", @"volume",
       @"waveType", @"panSpread", @"pans", @"noiseRate", @"lowPassHz",
       @"pulseWidth", @"waveTable", @"bitDepth", @"decay", @"sustain", @"filterType",
-      @"filterHz", @"filterQ", @"fmRatio", @"fmDepth", @"detunes"]);
+      @"filterHz", @"filterQ", @"fmRatio", @"fmDepth", @"detunes", @"spatialX", @"spatialY"]);
   if (failure) return failure;
   BOOL hasFrequencies = HasKey(options, @"frequencies");
   BOOL hasNotes = HasKey(options, @"notes");
@@ -570,7 +586,7 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
       @"frequencyEnd", @"lfoFreq", @"lfoDepth", @"noiseRate", @"noiseRateEnd",
       @"lowPassHz", @"pulseWidth", @"pulseWidthEnd", @"waveTable", @"bitDepth",
       @"decay", @"sustain", @"filterType", @"filterHz", @"filterHzEnd", @"filterQ",
-      @"fmRatio", @"fmDepth", @"fmDepthEnd", @"detune"]);
+      @"fmRatio", @"fmDepth", @"fmDepthEnd", @"detune", @"spatialX", @"spatialY"]);
   if (failure) return failure;
   id rawSteps = [options objectForKey:@"steps"];
   if (![rawSteps isKindOfClass:[NSArray class]]) return Failure(@"steps", @"not_array", rawSteps);
@@ -599,7 +615,7 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
         @"lfoFreq", @"lfoDepth", @"noiseRate", @"noiseRateEnd", @"lowPassHz",
         @"pulseWidth", @"pulseWidthEnd", @"waveTable", @"bitDepth",
         @"decay", @"sustain", @"filterType", @"filterHz", @"filterHzEnd", @"filterQ",
-        @"fmRatio", @"fmDepth", @"fmDepthEnd", @"detune"]);
+        @"fmRatio", @"fmDepth", @"fmDepthEnd", @"detune", @"spatialX", @"spatialY"]);
     if (failure) return failure;
     id restValue = [step objectForKey:@"rest"];
     if (HasKey(step, @"rest") && CFGetTypeID((__bridge CFTypeRef)restValue) != CFBooleanGetTypeID()) {
@@ -627,6 +643,8 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
       NSMutableDictionary *effective = [NSMutableDictionary dictionaryWithDictionary:options];
       [effective removeObjectForKey:@"steps"];
       [effective addEntriesFromDictionary:step];
+      failure = ValidateSpatial(effective);
+      if (failure) return failure;
       NSInteger stepMs = (NSInteger)llround(PatternStepDuration(options, step));
       if ((failure = ValidateExpressiveRules(effective, stepMs))) return failure;
       double stepFrequency = hasNote ? StrictNoteFrequency([step objectForKey:@"note"])
@@ -692,6 +710,8 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
       @"bitDepth": @{ @"min": @0, @"max": @16 },
       @"patternSteps": @{ @"min": @1, @"max": @(ContractMaxPatternSteps) },
       @"pan": @{ @"min": @-1.0, @"max": @1.0 },
+      @"spatialX": @{ @"min": @-1.0, @"max": @1.0 },
+      @"spatialY": @{ @"min": @-1.0, @"max": @1.0 },
       @"panSpread": @{ @"min": @0.0, @"max": @1.0 },
       @"lfoFreq": @{ @"min": @0.0, @"max": @20000.0 },
       @"lfoDepth": @{ @"min": @0.0, @"max": @20000.0 },

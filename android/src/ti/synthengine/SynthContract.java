@@ -150,7 +150,7 @@ final class SynthContract {
                 "waveType", "pan", "panEnd", "frequencyEnd", "lfoFreq", "lfoDepth",
                 "noiseRate", "noiseRateEnd", "lowPassHz", "pulseWidth", "pulseWidthEnd",
                 "waveTable", "bitDepth", "decay", "sustain", "filterType", "filterHz",
-                "filterHzEnd", "filterQ", "fmRatio", "fmDepth", "fmDepthEnd", "detune");
+                "filterHzEnd", "filterQ", "fmRatio", "fmDepth", "fmDepthEnd", "detune", "spatialX", "spatialY");
         if (!result.accepted) return result;
 
         boolean hasFrequency = contains(options, "frequency");
@@ -185,7 +185,7 @@ final class SynthContract {
                 "frequencies", "notes", "duration", "attack", "release", "volume",
                 "waveType", "panSpread", "pans", "noiseRate", "lowPassHz",
                 "pulseWidth", "waveTable", "bitDepth", "decay", "sustain", "filterType",
-                "filterHz", "filterQ", "fmRatio", "fmDepth", "detunes");
+                "filterHz", "filterQ", "fmRatio", "fmDepth", "detunes", "spatialX", "spatialY");
         if (!result.accepted) return result;
 
         boolean hasFrequencies = contains(options, "frequencies");
@@ -273,7 +273,7 @@ final class SynthContract {
                 "frequencyEnd", "lfoFreq", "lfoDepth", "noiseRate", "noiseRateEnd",
                 "lowPassHz", "pulseWidth", "pulseWidthEnd", "waveTable", "bitDepth",
                 "decay", "sustain", "filterType", "filterHz", "filterHzEnd", "filterQ",
-                "fmRatio", "fmDepth", "fmDepthEnd", "detune");
+                "fmRatio", "fmDepth", "fmDepthEnd", "detune", "spatialX", "spatialY");
         if (!result.accepted) return result;
 
         Object rawSteps = options != null ? options.get("steps") : null;
@@ -310,7 +310,7 @@ final class SynthContract {
                     "lfoFreq", "lfoDepth", "noiseRate", "noiseRateEnd", "lowPassHz",
                     "pulseWidth", "pulseWidthEnd", "waveTable", "bitDepth",
                     "decay", "sustain", "filterType", "filterHz", "filterHzEnd", "filterQ",
-                    "fmRatio", "fmDepth", "fmDepthEnd", "detune");
+                    "fmRatio", "fmDepth", "fmDepthEnd", "detune", "spatialX", "spatialY");
             if (!result.accepted) return result;
 
             boolean rest = Boolean.TRUE.equals(step.get("rest"));
@@ -347,6 +347,8 @@ final class SynthContract {
                 Map<String, Object> effective = new java.util.HashMap<>(options);
                 effective.remove("steps");
                 effective.putAll(step);
+                result = validateSpatial(effective);
+                if (!result.accepted) return result;
                 int stepMs = (int) Math.round(resolvePatternStepDuration(options, step));
                 result = validateExpressiveRules(effective, stepMs);
                 if (!result.accepted) return result;
@@ -480,9 +482,24 @@ final class SynthContract {
         return 440.0 * Math.pow(2.0, (midi - 69.0) / 12.0);
     }
 
+    private static Validation validateSpatial(Map<String, Object> options) {
+        Validation result = optionalDouble(options, "spatialX", -1.0, 1.0);
+        if (!result.accepted) return result;
+        result = optionalDouble(options, "spatialY", -1.0, 1.0);
+        if (!result.accepted) return result;
+        if (contains(options, "spatialX") || contains(options, "spatialY")) {
+            for (String key : new String[]{"pan", "panEnd", "pans", "panSpread"}) {
+                if (contains(options, key)) return Validation.rejected(key, "conflicting_spatial_fields", options.get(key));
+            }
+        }
+        return Validation.accepted();
+    }
+
     private static Validation validateVoiceOptions(Map<String, Object> options,
             double maxFrequencyHz, boolean allowSweep) {
-        Validation result = optionalInteger(options, "duration", MIN_DURATION_MS, MAX_DURATION_MS);
+        Validation result = validateSpatial(options);
+        if (!result.accepted) return result;
+        result = optionalInteger(options, "duration", MIN_DURATION_MS, MAX_DURATION_MS);
         if (!result.accepted) return result;
         result = optionalInteger(options, "attack", MIN_ATTACK_MS, MAX_ATTACK_MS);
         if (!result.accepted) return result;

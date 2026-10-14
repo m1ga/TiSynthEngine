@@ -69,3 +69,10 @@
 {"method":"playPattern","max":19845.0,"options":{"steps":[{"detune":700.0,"frequency":19000.0}]},"accepted":false,"key":"detune","reason":"out_of_range"}
 {"method":"playPattern","max":19845.0,"options":{"steps":[{"detunes":[1.0],"note":"C4"}]},"accepted":false,"key":"detunes","reason":"unsupported_option"}
 {"method":"playPattern","max":19845.0,"options":{"detunes":[1.0],"steps":[{"note":"C4"}]},"accepted":false,"key":"detunes","reason":"unsupported_option"}
+{"method":"playTone","max":19845.0,"options":{"spatialX":-1.0,"spatialY":1.0},"accepted":true}
+{"method":"playTone","max":19845.0,"options":{"spatialY":1.01},"accepted":false,"key":"spatialY","reason":"out_of_range"}
+{"method":"playTone","max":19845.0,"options":{"spatialY":true},"accepted":false,"key":"spatialY","reason":"non_numeric_or_non_finite"}
+{"method":"playTone","max":19845.0,"options":{"pan":0.0,"spatialX":0.2},"accepted":false,"key":"pan","reason":"conflicting_spatial_fields"}
+{"method":"playChord","max":19845.0,"options":{"frequencies":[440.0,660.0],"spatialY":-0.5},"accepted":true}
+{"method":"playPattern","max":19845.0,"options":{"spatialX":0.5,"steps":[{"frequency":440.0,"spatialY":-0.5}]},"accepted":true}
+{"method":"playPattern","max":19845.0,"options":{"pan":0.5,"steps":[{"frequency":440.0,"spatialY":-0.5}]},"accepted":false,"key":"pan","reason":"conflicting_spatial_fields"}

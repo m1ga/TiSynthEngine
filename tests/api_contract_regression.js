@@ -75,13 +75,13 @@ const supportedOptions = {
     'waveType', 'pan', 'panEnd', 'frequencyEnd', 'lfoFreq', 'lfoDepth',
     'noiseRate', 'noiseRateEnd', 'lowPassHz', 'pulseWidth', 'pulseWidthEnd',
     'waveTable', 'bitDepth', 'decay', 'sustain', 'filterType', 'filterHz',
-    'filterHzEnd', 'filterQ', 'fmRatio', 'fmDepth', 'fmDepthEnd', 'detune'
+    'filterHzEnd', 'filterQ', 'fmRatio', 'fmDepth', 'fmDepthEnd', 'detune', 'spatialX', 'spatialY'
   ],
   Chord: [
     'frequencies', 'notes', 'duration', 'attack', 'release', 'volume',
     'waveType', 'panSpread', 'pans', 'noiseRate', 'lowPassHz', 'pulseWidth',
     'waveTable', 'bitDepth', 'decay', 'sustain', 'filterType', 'filterHz',
-    'filterQ', 'fmRatio', 'fmDepth', 'detunes'
+    'filterQ', 'fmRatio', 'fmDepth', 'detunes', 'spatialX', 'spatialY'
   ],
   Pattern: [
     'steps', 'bpm', 'swing', 'stepDuration', 'noteValue', 'attack',
@@ -89,7 +89,7 @@ const supportedOptions = {
     'frequencyEnd', 'lfoFreq', 'lfoDepth', 'noiseRate', 'noiseRateEnd',
     'lowPassHz', 'pulseWidth', 'pulseWidthEnd', 'waveTable', 'bitDepth',
     'decay', 'sustain', 'filterType', 'filterHz', 'filterHzEnd', 'filterQ',
-    'fmRatio', 'fmDepth', 'fmDepthEnd', 'detune'
+    'fmRatio', 'fmDepth', 'fmDepthEnd', 'detune', 'spatialX', 'spatialY'
   ]
 }
 const patternStepOptions = [
@@ -98,7 +98,7 @@ const patternStepOptions = [
   'lfoFreq', 'lfoDepth', 'noiseRate', 'noiseRateEnd', 'lowPassHz',
   'pulseWidth', 'pulseWidthEnd', 'waveTable', 'bitDepth', 'decay', 'sustain',
   'filterType', 'filterHz', 'filterHzEnd', 'filterQ', 'fmRatio', 'fmDepth',
-  'fmDepthEnd', 'detune'
+  'fmDepthEnd', 'detune', 'spatialX', 'spatialY'
 ]
 
 function quotedValues(source, pattern, label) {

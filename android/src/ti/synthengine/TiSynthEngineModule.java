@@ -103,6 +103,8 @@ public class TiSynthEngineModule extends KrollModule {
         limits.put("waveType", range(SynthContract.MIN_WAVE_TYPE, SynthContract.MAX_WAVE_TYPE));
         limits.put("patternSteps", range(1, PATTERN_MAX_STEPS));
         limits.put("pan", range(-1.0, 1.0));
+        limits.put("spatialX", range(-1.0, 1.0));
+        limits.put("spatialY", range(-1.0, 1.0));
         limits.put("panSpread", range(0.0, 1.0));
         limits.put("lfoFreq", range(0.0, SynthContract.MAX_LFO));
         limits.put("lfoDepth", range(0.0, SynthContract.MAX_LFO));
@@ -768,6 +770,11 @@ public class TiSynthEngineModule extends KrollModule {
     /** The decay, sustain, filter and FM values of one event, over the values it inherits. */
     private double[] readExtras(KrollDict options, double[] inherited) {
         double[] extras = inherited.clone();
+        if (containsKey(options, "spatialX") || containsKey(options, "spatialY")) {
+            extras[SynthThread.EXTRA_SPATIAL] = 1.0;
+        }
+        copyNumber(options, "spatialX", extras, SynthThread.EXTRA_SPATIAL_X);
+        copyNumber(options, "spatialY", extras, SynthThread.EXTRA_SPATIAL_Y);
         copyNumber(options, "decay", extras, SynthThread.EXTRA_DECAY_MS);
         copyNumber(options, "sustain", extras, SynthThread.EXTRA_SUSTAIN);
         copyNumber(options, "filterHz", extras, SynthThread.EXTRA_FILTER_HZ);

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "../../shared/synth_core.h"
+#include "../../shared/synth_spatial.h"
 
 namespace {
 constexpr int kMaxVoices = 32;
@@ -20,8 +21,8 @@ constexpr int kMaxSteps = 32;
 constexpr int kMaxWavetableSamples = 64;
 constexpr int kQueueCapacity = 128;
 // Mirrors SynthThread.EXTRA_*: decay ms, sustain, filter type, cutoff, cutoff
-// end, Q, FM ratio, FM depth, FM depth end (NaN = no sweep).
-constexpr int kExtraCount = 9;
+// end, Q, FM ratio, FM depth, FM depth end (NaN = no sweep), spatial enabled, x, y.
+constexpr int kExtraCount = 12;
 constexpr double kPi = 3.14159265358979323846;
 
 template <typename T> T clampValue(T value, T low, T high) {
@@ -97,6 +98,8 @@ double eventGain(int profile, int waveType, int voiceCount) {
 }
 
 struct Command {
+  bool spatial = false;
+  double spatialX = 0.0, spatialY = 0.0;
   int type = 0;
   double frequency = 440.0;
   int duration = 1, attack = 0, release = 0;
@@ -119,6 +122,9 @@ struct Command {
 };
 
 struct Voice {
+  bool spatial = false;
+  SynthSpatial spatialState{};
+  int spatialDrain = 0;
   bool active = false;
   double phase = 0.0, increment = 0.0, incrementDelta = 0.0;
   int duration = 1, played = 0, attack = 0, release = 0;
@@ -143,6 +149,9 @@ struct Voice {
 };
 
 struct Tail {
+  bool spatial = false;
+  SynthSpatial spatialState{};
+  int spatialDrain = 0;
   bool active = false;
   double phase = 0.0, increment = 0.0, volume = 0.0;
   int waveType = 0;
@@ -393,6 +402,11 @@ private:
       snapshotTail(*voice, 6);
     *voice = Voice{};
     voice->active = true;
+    voice->spatial = command.spatial;
+    if (voice->spatial) {
+      synth_spatial_init(&voice->spatialState, command.spatialX, command.spatialY, renderSampleRate_);
+      voice->spatialDrain = voice->spatialState.taps - 1;
+    }
     voice->duration = std::max(1, command.duration);
     voice->attack = clampValue(command.attack, 0, voice->duration - 1);
     voice->release =
@@ -497,6 +511,11 @@ private:
     if (!tail)
       return;
     tail->active = true;
+    tail->spatial = voice.spatial;
+    if (tail->spatial) {
+      tail->spatialState = voice.spatialState;
+      tail->spatialDrain = tail->spatialState.taps - 1;
+    }
     tail->phase = voice.phase;
     tail->increment = clampValue(voice.increment, -0.45, 0.45);
     tail->volume = voice.volume * clampValue(voice.envelope, 0.0, 1.0);
@@ -525,6 +544,13 @@ private:
   void renderTail(Tail &tail, double &left, double &right) {
     if (!tail.active)
       return;
+    if (tail.spatial && tail.remaining <= 0) {
+      float l, r;
+      synth_spatial_process(&tail.spatialState, 0, &l, &r);
+      left += l; right += r;
+      if (--tail.spatialDrain <= 0) tail.active = false;
+      return;
+    }
     double wave;
     if (tail.waveType == 4) {
       tail.noisePhase += tail.noiseIncrement;
@@ -550,21 +576,34 @@ private:
     const double fade = smoothStep(static_cast<double>(tail.remaining - 1) /
                                    std::max(1, tail.total - 1));
     const double sample = wave * tail.volume * fade;
-    left += sample * tail.left;
-    right += sample * tail.right;
+    if (tail.spatial) {
+      float spatialL, spatialR;
+      synth_spatial_process(&tail.spatialState, static_cast<float>(sample), &spatialL, &spatialR);
+      left += spatialL; right += spatialR;
+    } else {
+      left += sample * tail.left;
+      right += sample * tail.right;
+    }
     tail.phase += tail.increment;
     tail.phase -= std::floor(tail.phase);
     if (tail.fmActive) {
       tail.modPhase += tail.increment * tail.fmRatio;
       tail.modPhase -= std::floor(tail.modPhase);
     }
-    if (--tail.remaining <= 0)
+    if (--tail.remaining <= 0 && !tail.spatial)
       tail.active = false;
   }
 
   void renderVoice(Voice &voice, double &left, double &right) {
     if (!voice.active)
       return;
+    if (voice.spatial && voice.played >= voice.duration) {
+      float l, r;
+      synth_spatial_process(&voice.spatialState, 0, &l, &r);
+      left += l; right += r;
+      if (--voice.spatialDrain <= 0) voice.active = false;
+      return;
+    }
     if (voice.stepCount > 0 && ++voice.samplesInStep >= voice.stepSamples) {
       voice.samplesInStep = 0;
       voice.step = (voice.step + 1) % voice.stepCount;
@@ -616,8 +655,14 @@ private:
                        voice.sustain, voice.release);
     voice.envelope = envelope;
     const double sample = wave * envelope * voice.volume;
-    left += sample * voice.left;
-    right += sample * voice.right;
+    if (voice.spatial) {
+      float spatialL, spatialR;
+      synth_spatial_process(&voice.spatialState, static_cast<float>(sample), &spatialL, &spatialR);
+      left += spatialL; right += spatialR;
+    } else {
+      left += sample * voice.left;
+      right += sample * voice.right;
+    }
     voice.phase += increment;
     voice.phase -= std::floor(voice.phase);
     if (voice.fmActive) {
@@ -632,8 +677,10 @@ private:
       voice.pan = clampValue(voice.pan + voice.panDelta, -1.0, 1.0);
       updatePan(voice);
     }
-    if (++voice.played >= voice.duration)
-      voice.active = false;
+    if (++voice.played >= voice.duration) {
+      if (voice.spatial) voice.envelope = 0;
+      else voice.active = false;
+    }
   }
 
   void limit(double left, double right) {
@@ -750,6 +797,9 @@ void applyExtras(JNIEnv *env, Command &command, jdoubleArray extras,
   command.fmDepth = v[7];
   command.fmDepthSweep = !std::isnan(v[8]);
   command.fmDepthEnd = command.fmDepthSweep ? v[8] : 0.0;
+  command.spatial = v[9] != 0.0;
+  command.spatialX = v[10];
+  command.spatialY = v[11];
 }
 } // namespace
 

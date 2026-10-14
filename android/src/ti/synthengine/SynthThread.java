@@ -16,7 +16,10 @@ public final class SynthThread extends Thread {
     static final int EXTRA_FM_DEPTH = 7;
     /** NaN when the event has no modulation-depth sweep. */
     static final int EXTRA_FM_DEPTH_END = 8;
-    static final int EXTRA_COUNT = 9;
+    static final int EXTRA_SPATIAL = 9;
+    static final int EXTRA_SPATIAL_X = 10;
+    static final int EXTRA_SPATIAL_Y = 11;
+    static final int EXTRA_COUNT = 12;
 
     private long nativeHandle;
 

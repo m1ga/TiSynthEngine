@@ -153,6 +153,16 @@ public final class SynthContractRegression {
                 "gain", "unsupported_option", "volume rejects unknown option");
 
         expressiveContract();
+        record("playTone", map("spatialX", -1.0, "spatialY", 1.0), SynthContract.validateTone(map("spatialX", -1.0, "spatialY", 1.0), MAX_FREQUENCY));
+        record("playTone", map("spatialY", 1.01), SynthContract.validateTone(map("spatialY", 1.01), MAX_FREQUENCY));
+        record("playTone", map("spatialY", true), SynthContract.validateTone(map("spatialY", true), MAX_FREQUENCY));
+        record("playTone", map("spatialX", .2, "pan", 0.0), SynthContract.validateTone(map("spatialX", .2, "pan", 0.0), MAX_FREQUENCY));
+        Map<String,Object> spatialChord = map("frequencies", new Object[]{440.0, 660.0}, "spatialY", -.5);
+        record("playChord", spatialChord, SynthContract.validateChord(spatialChord, MAX_FREQUENCY));
+        Map<String,Object> spatialPattern = map("spatialX", .5, "steps", new Object[]{map("frequency", 440.0, "spatialY", -.5)});
+        record("playPattern", spatialPattern, SynthContract.validatePattern(spatialPattern, MAX_FREQUENCY));
+        Map<String,Object> conflictingPattern = map("pan", .5, "steps", new Object[]{map("frequency", 440.0, "spatialY", -.5)});
+        record("playPattern", conflictingPattern, SynthContract.validatePattern(conflictingPattern, MAX_FREQUENCY));
         writeOrVerifyCorpus();
 
         System.out.println("SynthContractRegression: all tests passed");
