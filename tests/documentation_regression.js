@@ -342,4 +342,66 @@ assert(!('spatialY' in requests.at(-1)))
 assert.throws(() => sandbox.playPositionedTone(originalRecipe, 0, 0, 0, 800),
   /positive dimensions/, 'invalid arena dimensions are rejected')
 
+// Execute rhythm examples so a short voice duration cannot silently replace
+// the tempo grid advertised by the surrounding documentation.
+function patternExample(source, heading) {
+  const section = source.split(heading + '\n')[1].split(/\n#{1,3} /)[0]
+  const code = section.match(/```javascript\s*\n([\s\S]*?)```/)[1]
+  const patterns = []
+  vm.runInNewContext(code, {
+    synth: { playPattern: options => { patterns.push(options); return true } },
+    WAVE: { SINE: 0, SQUARE: 1, SAWTOOTH: 2, TRIANGLE: 3, NOISE: 4 }
+  })
+  assert.strictEqual(patterns.length, 1, heading + ' submits one pattern')
+  return patterns[0]
+}
+function rhythm(pattern) {
+  let elapsed = 0
+  return Array.from(pattern.steps, (step, index) => {
+    const value = step.noteValue || pattern.noteValue
+    const quarter = 60000 / (pattern.bpm || 120)
+    const noteMs = { '4n': quarter, '8n': quarter / 2, '16n': quarter / 4 }[value]
+    const duration = step.duration ?? noteMs ?? pattern.stepDuration ?? 100
+    const start = Math.max(0, elapsed + (index % 2 ? -1 : 1) * (pattern.swing || 0) * duration)
+    elapsed += duration
+    return { start, duration, rest: step.rest === true }
+  })
+}
+function closeTo(actual, expected, message) {
+  assert(Math.abs(actual - expected) < 1e-7, message + ': ' + actual + ' vs ' + expected)
+}
+const tempoPattern = patternExample(examples, '## Tempo, note values and swing')
+const tempoRhythm = rhythm(tempoPattern)
+const eighthAt132 = 60000 / 132 / 2
+for (let index = 0; index < tempoRhythm.length; index++) {
+  closeTo(tempoRhythm[index].duration, eighthAt132 * (index === 4 ? 2 : 1),
+    'tempo example retains its eighth/quarter-note durations')
+}
+closeTo(tempoRhythm[0].start, eighthAt132 * 0.12, 'swing uses the first resolved eighth')
+closeTo(tempoRhythm[4].start, eighthAt132 * 4 + eighthAt132 * 2 * 0.12,
+  'swing uses the final resolved quarter, not the root fallback')
+const millisecondRhythm = rhythm(patternExample(examples, '## Millisecond pattern'))
+assert.deepStrictEqual(millisecondRhythm.filter(step => !step.rest).map(step => step.start),
+  [0, 110, 220, 330], '90 ms notes plus rests retain 110 ms onset spacing')
+assert.strictEqual(millisecondRhythm.at(-1).duration, 180, 'the final tone retains its long ending')
+for (const [source, heading, bpm, divisor] of [
+  [examples, '## Noise percussion', 116, 4],
+  [soundDesign, '### Noise percussion', 112, 2],
+  [soundDesign, '### Retro pickup', 180, 4]
+]) {
+  const pattern = patternExample(source, heading)
+  const grid = 60000 / bpm / divisor
+  for (const [index, step] of rhythm(pattern).entries()) {
+    closeTo(step.duration, grid * (heading === '### Retro pickup' && index === 3 ? 2 : 1),
+      heading + ' keeps its advertised note grid')
+  }
+  if (heading.includes('Noise percussion')) {
+    for (const step of pattern.steps.filter(step => !step.rest)) {
+      assert(step.attack + step.decay < grid, 'percussion settles before the next beat')
+      assert.strictEqual(step.sustain, 0, 'percussion does not hold a level through the beat')
+      assert(step.release <= Math.round(grid) - step.attack, 'percussion release fits the native envelope')
+    }
+  }
+}
+
 console.log('documentation_regression: all tests passed')

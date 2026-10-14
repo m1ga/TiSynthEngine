@@ -87,7 +87,7 @@ the precise device limit matters.
 
 ## Limits
 
-All ranges include their endpoints. `getDefaults().limits` uses `{ min, max }` objects. Sweep targets and array elements share the corresponding base range: `panEnd`/`pans[]` use `pan`, `frequencyEnd` uses `frequency` plus disabled value 0, `noiseRateEnd` uses `noiseRate`, `filterHzEnd` uses `filterHz` plus disabled value 0, `fmDepthEnd` uses `fmDepth`, and `detunes[]` uses `detune`. The sample-count key is `waveTableSamples`; there is no `limits.waveTable` object.
+All ranges include their endpoints. `getDefaults().limits` uses `{ min, max }` objects. Sweep targets and array elements share the corresponding base range: `panEnd`/`pans[]` use `pan`, `frequencyEnd` accepts 0 through the frequency maximum, but only targets of at least 1 Hz enable a sweep (values below 1 disable it), `noiseRateEnd` uses `noiseRate`, `filterHzEnd` uses `filterHz` plus disabled value 0, `fmDepthEnd` uses `fmDepth`, and `detunes[]` uses `detune`. The sample-count key is `waveTableSamples`; there is no `limits.waveTable` object.
 
 | Field | Minimum | Maximum | Unit or rule |
 | --- | ---: | ---: | --- |
@@ -102,7 +102,7 @@ All ranges include their endpoints. `getDefaults().limits` uses `{ min, max }` o
 | `pan`, `panEnd`, `pans[]` | -1 | 1 | left to right |
 | `spatialX`, `spatialY` | -1 | 1 | fixed binaural direction; omitted unless enabled |
 | `panSpread` | 0 | 1 | chord stereo width |
-| `frequencyEnd` | 0 | `sampleRate * 0.45` | Hz; 0 disables the sweep |
+| `frequencyEnd` | 0 | `sampleRate * 0.45` | Hz; values below 1 disable the sweep |
 | `lfoFreq` | 0 | 20,000 | Hz; 0 disables vibrato |
 | `lfoDepth` | 0 | 20,000 | Hz |
 | `noiseRate`, `noiseRateEnd` | 0 | `sampleRate * 0.45` | Hz; 0 selects white noise or disables the sweep |
@@ -164,7 +164,7 @@ Plays one pitch. It uses 440 Hz when neither pitch field is present. Note names 
 | `waveType` | integer | `SINE` | One of the six waveform values. |
 | `pan` | number | `0` | Starting stereo position. |
 | `panEnd` | number | same as `pan` | Ending stereo position; omission keeps the position fixed. |
-| `frequencyEnd` | number | `0` | Ending frequency; 0 keeps the starting pitch. |
+| `frequencyEnd` | number | `0` | Ending frequency; values below 1 keep the starting pitch. |
 | `lfoFreq` | number | `0` | Vibrato rate in Hz. |
 | `lfoDepth` | number | `0` | Vibrato depth in Hz. |
 | `noiseRate` | number | `0` | Noise update rate; 0 produces a fresh value per sample. |
@@ -294,11 +294,13 @@ Step keys:
 | `spatialX`, `spatialY` | number | Override either inherited coordinate for this step. |
 
 Step timing precedence is `duration`, step `noteValue`, pattern `noteValue`,
-pattern `stepDuration`, then 100 ms. Only one pattern remains pending at a
+pattern `stepDuration`, then 100 ms. The resolved length controls both the voice
+duration and the advance to the next step; there is no independent gate length.
+A step `duration` overrides musical timing rather than shortening a voice inside it. Only one pattern remains pending at a
 time. Starting another one cancels steps that have not fired, and the cancelled
 pattern reports it through the [`patternend` event](#patternend-event).
 
-Musical note values and numeric `stepDuration` can resolve to fractional milliseconds; each voice envelope uses the nearest integer millisecond. Explicit step `duration` must be an integer. Each step keeps its resolved duration. Swing changes its scheduled start by `swing * stepDuration` for even steps (zero-based) and the negative of that offset for odd steps; a negative start is clamped to the call time. Positive swing delays even steps and advances odd ones, so voices can overlap. Pattern `panEnd` defaults to the root `pan`; a step overriding only `pan` still inherits the root ending position. Set both on that step for fixed stereo placement.
+Musical note values and numeric `stepDuration` can resolve to fractional milliseconds; each voice envelope uses the nearest integer millisecond. Explicit step `duration` must be an integer. Each step keeps its resolved duration. Swing changes its scheduled start by `swing` multiplied by that step's resolved duration for even steps (zero-based) and the negative of that offset for odd steps; a negative start is clamped to the call time. Positive swing delays even steps and advances odd ones, so voices can overlap. Pattern `panEnd` defaults to the root `pan`; a step overriding only `pan` still inherits the root ending position. Set both on that step for fixed stereo placement.
 
 Acceptance schedules the pattern, but a later native queue overflow can still drop an individual step and log `overflow`; `patternend` describes the schedule, not a guarantee that every step sounded.
 

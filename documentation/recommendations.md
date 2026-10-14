@@ -7,7 +7,8 @@ audio systems sharing one lifecycle.
 ## Group simultaneous notes
 
 Use `playChord()` when pitches form one known simultaneous event. The chord is
-atomic and its source gain accounts for its voice count. Separate `playTone()`
+atomic. Protected profiles normalize per-voice source gain by the square root
+of the event voice count; `raw` bypasses that normalization. Separate `playTone()`
 calls are appropriate for independent touches and effects, but their start
 times and gain are independent too.
 
@@ -98,8 +99,9 @@ more than the basic controls do.
 - FM is not band-limited. A high carrier with a large `fmDepth` and `fmRatio`
   aliases. Keep carriers of bell-like sounds around 500 Hz, or lower the index.
 - A detuned stack is one voice per copy. Count them when choosing `maxVoices`.
-  Event gain divides by the square root of the voice count, so the stack gets
-  wider, not louder.
+  Protected profiles divide per-voice source gain by the square root of the
+  event voice count; `raw` does not. Correlated or phase-aligned voices can still
+  reinforce each other, so this is not a guarantee of constant loudness or peaks.
 - `patternend` follows the pattern scheduler. Use it to chain cues and release
   state, not to line up audio to the sample.
 
