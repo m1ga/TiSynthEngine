@@ -33,6 +33,8 @@ jobs:
         run: |
           cc -std=c99 -O2 -Wall -Wextra -Wpedantic -o "$RUNNER_TEMP/dsp_core" tests/dsp_core_regression.c -lm
           "$RUNNER_TEMP/dsp_core"
+          cc -std=c99 -O2 -Wall -Wextra -Wpedantic -o "$RUNNER_TEMP/spatial" tests/spatial_regression.c -lm
+          "$RUNNER_TEMP/spatial"
 
       - name: Java contract and DSP tests
         working-directory: android
@@ -41,7 +43,9 @@ jobs:
           javac -d "$test_dir" \
             src/ti/synthengine/SynthContract.java \
             test/ti/synthengine/SynthContractRegression.java \
+            test/ti/synthengine/SynthSpatialContractRegression.java \
             src/ti/synthengine/SynthDsp.java \
             test/ti/synthengine/SynthDspRegression.java
           java -cp "$test_dir" ti.synthengine.SynthContractRegression
+          java -cp "$test_dir" ti.synthengine.SynthSpatialContractRegression
           java -cp "$test_dir" ti.synthengine.SynthDspRegression
