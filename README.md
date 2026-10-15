@@ -92,10 +92,13 @@ Apps that start ads, remote configuration or entry animations may need a longer 
 
 ## Public methods
 
-The module exposes exactly eight methods and one event, `patternend`.
+The module exposes exactly eleven methods and one event, `patternend`.
 
 | Method                 | Returns   | What it does                                                                |
 | ---------------------- | --------- | --------------------------------------------------------------------------- |
+| `getStats()`           | `Object`  | Returns basic counters and enabled diagnostics; see the [stats contract](documentation/api.md#getstats). |
+| `resetStats()`         | nothing   | Resets accumulated statistics without stopping sounds. |
+| `setStatsEnabled(bool)` | `Boolean` | Enables optional timing and signal measurements (off by default). |
 | `getDefaults()`        | `Object`  | Reports the API version, defaults, limits, profiles and waveform constants. |
 | `startEngine(options)` | `Boolean` | Opens the native stream and fixes its voice capacity and mixing profile.    |
 | `playTone(options)`    | `Boolean` | Plays one pitch with optional sweep, pan movement and vibrato.              |
@@ -389,10 +392,6 @@ Connecting or disconnecting an output may cut the note crossing the hardware tra
 ## Build and test
 
 The [Android notes](android/README.md), [iOS notes](ios/README.md) and [audio engine guide](documentation/audio-engine.md#regression-coverage) contain the build and host-test commands.
-
-## Planned work
-
-See [the to-do list](TODO.md), including the proposed MIDI file reader/converter.
 
 ## License
 

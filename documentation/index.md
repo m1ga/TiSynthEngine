@@ -5,7 +5,7 @@ iOS. It plays generated tones, chords, noise and timed patterns through the
 same JavaScript contract on both platforms.
 
 Start with the [README](../README.md) if you have not installed the module yet.
-It covers the lifecycle, the eight public methods, the `patternend` event and
+It covers the lifecycle, the eleven public methods, the `patternend` event and
 the most common options.
 
 ## Guides

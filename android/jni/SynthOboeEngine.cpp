@@ -14,6 +14,7 @@
 
 #include "../../shared/synth_core.h"
 #include "../../shared/synth_spatial.h"
+#include "../../shared/synth_stats.h"
 
 namespace {
 constexpr int kMaxVoices = 32;
@@ -174,8 +175,48 @@ public:
   Engine(int maxVoices, int profile)
       : maxVoices_(clampValue(maxVoices, 1, kMaxVoices)),
         profile_(clampValue(profile, 0, 3)), voices_(maxVoices_),
-        tails_(maxVoices_) {}
+        tails_(maxVoices_) { synth_stats_init(&stats_); }
 
+  int maxVoices() const { return maxVoices_; }
+  void readStats(double *out) {
+    synth_stats_read(&stats_, out);
+  }
+  int pendingCommands() {
+    std::lock_guard<std::mutex> guard(producerMutex_);
+    auto read = read_.load(std::memory_order_acquire);
+    return (write_.load(std::memory_order_acquire) + kQueueCapacity - read) % kQueueCapacity;
+  }
+  void collectXruns() {
+    if(!stream_) return;
+    auto count=stream_->getXRunCount();
+    if(count) {
+      xrunAvailable_=true;
+      int64_t current=count.value();
+      xrunTotal_ += current >= xrunLast_ ? current-xrunLast_ : current;
+      xrunLast_=current;
+    } else {
+      xrunAvailable_=false; xrunCoverageLost_=true;
+    }
+  }
+  void backendStats(double &buffer, double &xruns, double &latency) {
+    std::lock_guard<std::mutex> guard(streamMutex_);
+    collectXruns();
+    latency=NAN;
+    if(stream_) {
+      auto estimate=stream_->calculateLatencyMillis();
+      if(estimate && std::isfinite(estimate.value()) && estimate.value()>=0)
+        latency=estimate.value()+lookahead_*1000.0/renderSampleRate_;
+    }
+    const int bufferFrames=stream_ ? stream_->getBufferSizeInFrames() : 0;
+    buffer=bufferFrames>0 ? (double)bufferFrames : NAN;
+    xruns = xrunAvailable_ && !xrunCoverageLost_ ? (double)xrunTotal_ : NAN;
+  }
+  void enableStats(bool enabled) { synth_stats_enable(&stats_, enabled); }
+  void resetStats() {
+    std::lock_guard<std::mutex> guard(streamMutex_);
+    collectXruns(); xrunTotal_=0; xrunCoverageLost_=false;
+    synth_stats_reset(&stats_);
+  }
   bool open() {
     std::lock_guard<std::mutex> guard(streamMutex_);
     return openLocked();
@@ -234,23 +275,29 @@ public:
     closing_.store(true, std::memory_order_release);
     std::lock_guard<std::mutex> guard(streamMutex_);
     closeStreamLocked();
+    clearRenderState();
+    read_.store(write_.load(std::memory_order_acquire),std::memory_order_release);
   }
 
   oboe::DataCallbackResult onAudioReady(oboe::AudioStream *, void *audioData,
                                         int32_t frames) override {
+    const bool measure = synth_stats_begin(&stats_);
+    const auto begin = measure ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     processCommands();
     auto *output = static_cast<float *>(audioData);
     for (int32_t frame = 0; frame < frames; ++frame) {
       double left = 0.0, right = 0.0;
-      for (Voice &voice : voices_)
+      if (stats_.active > 0) for (Voice &voice : voices_)
         renderVoice(voice, left, right);
-      for (Tail &tail : tails_)
+      if (stats_.tails > 0) for (Tail &tail : tails_)
         renderTail(tail, left, right);
       limit(left, right);
       output[frame * 2] = static_cast<float>(clampValue(outputL_, -1.0, 1.0));
       output[frame * 2 + 1] =
           static_cast<float>(clampValue(outputR_, -1.0, 1.0));
+      if (measure) synth_stats_sample(&stats_, output[frame*2], output[frame*2+1], limiterGain_, renderSampleRate_);
     }
+    synth_stats_end(&stats_, frames, renderSampleRate_, measure ? std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count() : 0);
     return oboe::DataCallbackResult::Continue;
   }
 
@@ -272,6 +319,8 @@ public:
     // callback. Drop in-flight voices because their sample counts and phase
     // increments belong to the previous route's sample rate. Commands queued
     // while the route settles remain available to the new stream.
+    collectXruns();
+    xrunLast_=0;
     stream_.reset();
     clearRenderState();
     reopenAndStartLocked();
@@ -307,6 +356,7 @@ private:
     if (burst > 0)
       newStream->setBufferSizeInFrames(burst * 2);
     initializeLimiter();
+    xrunLast_=0;
     stream_ = std::move(newStream);
     return true;
   }
@@ -318,6 +368,7 @@ private:
   void closeStreamLocked() {
     if (stream_) {
       stream_->stop();
+      collectXruns();
       stream_->close();
       stream_.reset();
     }
@@ -344,6 +395,7 @@ private:
       voice = Voice{};
     for (Tail &tail : tails_)
       tail = Tail{};
+    synth_stats_stopped(&stats_);
   }
 
   int toSamples(int ms) const {
@@ -374,6 +426,7 @@ private:
         for (Voice &voice : voices_) {
           if (voice.active)
             snapshotTail(voice, 20);
+          if (voice.active) synth_stats_voice_end(&stats_, voice.spatial);
           voice.active = false;
         }
       }
@@ -398,6 +451,7 @@ private:
     }
     if (!voice)
       return;
+    synth_stats_voice_start(&stats_, voice->active, voice->spatial, command.spatial);
     if (voice->active)
       snapshotTail(*voice, 6);
     *voice = Voice{};
@@ -510,6 +564,7 @@ private:
     }
     if (!tail)
       return;
+    synth_stats_tail_start(&stats_, tail->active);
     tail->active = true;
     tail->spatial = voice.spatial;
     if (tail->spatial) {
@@ -548,7 +603,7 @@ private:
       float l, r;
       synth_spatial_process(&tail.spatialState, 0, &l, &r);
       left += l; right += r;
-      if (--tail.spatialDrain <= 0) tail.active = false;
+      if (--tail.spatialDrain <= 0) { tail.active = false; synth_stats_tail_end(&stats_); }
       return;
     }
     double wave;
@@ -591,7 +646,7 @@ private:
       tail.modPhase -= std::floor(tail.modPhase);
     }
     if (--tail.remaining <= 0 && !tail.spatial)
-      tail.active = false;
+      { tail.active = false; synth_stats_tail_end(&stats_); }
   }
 
   void renderVoice(Voice &voice, double &left, double &right) {
@@ -601,7 +656,7 @@ private:
       float l, r;
       synth_spatial_process(&voice.spatialState, 0, &l, &r);
       left += l; right += r;
-      if (--voice.spatialDrain <= 0) voice.active = false;
+      if (--voice.spatialDrain <= 0) { voice.active = false; synth_stats_voice_end(&stats_, true); }
       return;
     }
     if (voice.stepCount > 0 && ++voice.samplesInStep >= voice.stepSamples) {
@@ -679,7 +734,7 @@ private:
     }
     if (++voice.played >= voice.duration) {
       if (voice.spatial) voice.envelope = 0;
-      else voice.active = false;
+      else { voice.active = false; synth_stats_voice_end(&stats_, false); }
     }
   }
 
@@ -723,6 +778,9 @@ private:
     outputR_ = delayedR * limiterGain_;
   }
 
+  int64_t xrunTotal_=0, xrunLast_=0;
+  bool xrunAvailable_=false, xrunCoverageLost_=false;
+  SynthStats stats_{};
   int maxVoices_, profile_, renderSampleRate_ = 48000;
   std::atomic<int> reportedSampleRate_{48000};
   std::vector<Voice> voices_;
@@ -902,4 +960,23 @@ Java_ti_synthengine_SynthThread_nativeDestroy(JNIEnv *, jclass, jlong handle) {
   std::unique_ptr<EngineHandle> engineHandle(
       reinterpret_cast<EngineHandle *>(handle));
   (*engineHandle)->close();
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_ti_synthengine_SynthThread_nativeGetStats(JNIEnv *env, jclass, jlong handle) {
+  auto e=fromHandle(handle);
+  double values[SYNTH_STATS_COUNT+6]; e->readStats(values);
+  values[SYNTH_STATS_COUNT]=e->pendingCommands();
+  e->backendStats(values[SYNTH_STATS_COUNT+1],values[SYNTH_STATS_COUNT+2],values[SYNTH_STATS_COUNT+5]);
+  values[SYNTH_STATS_COUNT+3]=e->sampleRate();
+  values[SYNTH_STATS_COUNT+4]=e->maxVoices();
+  jdoubleArray result=env->NewDoubleArray(SYNTH_STATS_COUNT+6);
+  if(result) env->SetDoubleArrayRegion(result,0,SYNTH_STATS_COUNT+6,values);
+  return result;
+}
+extern "C" JNIEXPORT void JNICALL
+Java_ti_synthengine_SynthThread_nativeStatsControl(JNIEnv *, jclass, jlong handle, jint operation) {
+  auto e=fromHandle(handle);
+  if(operation==3) e->close();
+  else if(operation==2) e->resetStats(); else e->enableStats(operation==1);
 }

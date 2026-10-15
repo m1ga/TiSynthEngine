@@ -9,6 +9,9 @@ var WAVE = defaults.waveTypes
 var STEPPED_WAVE = [-1, -0.78, -0.16, 0.84, 1, 0.42, -0.2, -0.62]
 var engineRunning = false
 var startTimer = null
+var statsTimer = null
+// Opt in while diagnosing; the example adds no statistics UI.
+var LOG_AUDIO_STATS = false
 var interactiveControls = []
 
 var COLORS = {
@@ -939,6 +942,11 @@ function startAppCycles() {
   }
 
   engineRunning = true
+  if (LOG_AUDIO_STATS && Synth.setStatsEnabled(true)) {
+    statsTimer = setInterval(function () {
+      Ti.API.info(JSON.stringify(Synth.getStats()))
+    }, 200)
+  }
   scrollView.touchEnabled = true
   interactiveControls.forEach(function (control) {
     control.applyProperties({ opacity: 1, touchEnabled: true })
@@ -960,6 +968,10 @@ function hideAndroidActionBar() {
 }
 
 function cleanup() {
+  if (statsTimer !== null) {
+    clearInterval(statsTimer)
+    statsTimer = null
+  }
   Synth.removeEventListener('patternend', onPatternEnd)
   win.removeEventListener('postlayout', onFirstPostLayout)
   win.removeEventListener('open', hideAndroidActionBar)

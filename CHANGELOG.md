@@ -6,14 +6,17 @@ Beta for the planned first public release.
 
 ### Added
 
+- Add `getStats()`, `resetStats()` and opt-in `setStatsEnabled(Boolean)` with cross-platform voice, command and rejection counters, render timing and final-output signal meters.
+- Avoid scanning empty voice/tail groups during render; verify identical host output against the previous engine.
+
 - Add optional front-plane headphone binaural positioning with `spatialX` and `spatialY` on tones, chords and patterns.
 - Share a compact MIT KEMAR HRTF FIR implementation between Android and iOS, including filter history during voice replacement and stopping.
 - Add spatial contract parity and DSP regression coverage; ordinary calls keep stereo panning.
 - Document per-effect JavaScript integration, app controls, installed-feature detection and stereo fallback; check API table coverage against the native contract.
 
 - Native low-latency tone synthesis for Titanium on Android and iOS.
-- Eight public methods: `getDefaults`, `startEngine`, `playTone`, `playChord`,
-  `playPattern`, `setVolume`, `stopAll` and `shutdown`.
+- Eleven public methods: `getDefaults`, `startEngine`, `playTone`, `playChord`,
+  `playPattern`, `setVolume`, `stopAll`, `shutdown`, `getStats`, `resetStats` and `setStatsEnabled`.
 - Sine, square, sawtooth, triangle, white-noise and custom wavetable sources.
 - Envelopes, stereo pan movement, pitch sweeps, vibrato, chords and timed
   patterns with tempo, note values and swing.

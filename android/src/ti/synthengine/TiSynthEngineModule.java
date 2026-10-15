@@ -41,6 +41,59 @@ public class TiSynthEngineModule extends KrollModule {
     private static final int PATTERN_MAX_STEPS = SynthContract.MAX_PATTERN_STEPS;
 
     private volatile SynthThread synthThread;
+    private boolean statsEnabled;
+    private double[] lastStats = emptyStats();
+    private final java.util.concurrent.atomic.AtomicLongArray rejected = new java.util.concurrent.atomic.AtomicLongArray(3);
+    private final java.util.concurrent.atomic.AtomicLong droppedPatternSteps = new java.util.concurrent.atomic.AtomicLong();
+    // JNI layout: shared ST_* fields 0..12, pending/buffer/xruns/rate/capacity/latency 13..18.
+    private static double[] emptyStats() {
+        double[] v = new double[19];
+        for(int i=6;i<13;i++) v[i]=Double.NaN;
+        v[14]=v[15]=v[18]=Double.NaN; v[16]=44100; v[17]=SynthContract.DEFAULT_MAX_VOICES;
+        return v;
+    }
+    private boolean reject(int reason) { rejected.incrementAndGet(reason); return false; }
+    private Object statNumber(double v) { return Double.isNaN(v) ? null : v; }
+    private KrollDict stereoStats(double left, double right) {
+        KrollDict v = new KrollDict(); v.put("left",left); v.put("right",right); return v;
+    }
+    @Kroll.method
+    public synchronized KrollDict getStats() {
+        double[] v = synthThread == null ? lastStats : synthThread.getStats();
+        if(v == null) v=lastStats;
+        KrollDict r = new KrollDict();
+        String[] keys={"activeVoices","peakActiveVoices","tailVoices","spatialVoices","voiceStealCount","callbackFrames","renderLoad","peakRenderLoad"};
+        for(int i=0;i<keys.length;i++) r.put(keys[i], statNumber(v[i]));
+        r.put("outputPeakDbFS",Double.isNaN(v[8]) ? null : stereoStats(v[8],v[9]));
+        r.put("outputRmsDbFS",Double.isNaN(v[10]) ? null : stereoStats(v[10],v[11]));
+        r.put("limiterReductionDb",statNumber(v[12]));
+        r.put("pendingCommands",v[13]); r.put("bufferFrames",statNumber(v[14]));
+        r.put("underrunCount",statNumber(v[15])); r.put("sampleRate",v[16]); r.put("maxVoices",v[17]);
+        r.put("estimatedOutputLatencyMs",statNumber(v[18]));
+        KrollDict reasons = new KrollDict();
+        long validation=rejected.get(0), stopped=rejected.get(1), full=rejected.get(2);
+        reasons.put("validation",validation); reasons.put("engineStopped",stopped); reasons.put("queueFull",full);
+        r.put("rejectedRequestsByReason",reasons); r.put("rejectedRequestCount",validation+stopped+full);
+        r.put("droppedPatternStepCount",droppedPatternSteps.get());
+        return r;
+    }
+    @Kroll.method
+    public synchronized boolean setStatsEnabled(Object enabled) {
+        if(!(enabled instanceof Boolean)) return reject(0);
+        statsEnabled=(Boolean)enabled;
+        if(synthThread != null) synthThread.statsControl(statsEnabled ? 1 : 0);
+        for(int i=6;i<13;i++) lastStats[i]=Double.NaN;
+        return true;
+    }
+    @Kroll.method
+    public synchronized void resetStats() {
+        for(int i=0;i<3;i++) rejected.set(i,0);
+        droppedPatternSteps.set(0);
+        if(synthThread != null) synthThread.statsControl(2);
+        lastStats[4]=0; lastStats[1]=lastStats[0];
+        if(!Double.isNaN(lastStats[15])) lastStats[15]=0;
+        for(int i=6;i<13;i++) lastStats[i]=Double.NaN;
+    }
     private ScheduledExecutorService patternScheduler;
     private final Set<String> warnedKeys = new HashSet<>();
     private final Object patternLock = new Object();
@@ -146,21 +199,30 @@ public class TiSynthEngineModule extends KrollModule {
     }
 
     @Kroll.method
-    public boolean startEngine(KrollDict options) {
+    public synchronized boolean startEngine(KrollDict options) {
         if (!acceptValidation("startEngine", SynthContract.validateStartEngine(options))) return false;
         if (synthThread != null) return true;
         int maxVoices = readOptionalIntOption(options, "startEngine", "maxVoices",
                 SynthContract.DEFAULT_MAX_VOICES, 1, MAX_VOICES_LIMIT);
         int mixingProfile = readMixingProfile(options);
         if (mixingProfile < 0) return false;
-        synthThread = new SynthThread(maxVoices, mixingProfile);
-        synthThread.start();
+        SynthThread candidate = new SynthThread(maxVoices, mixingProfile);
+        candidate.statsControl(statsEnabled ? 1 : 0);
+        if (!candidate.startAudio()) {
+            candidate.requestShutdown();
+            return reject(1);
+        }
+        synthThread = candidate;
+        lastStats=emptyStats();
+        for(int i=0;i<3;i++) rejected.set(i,0);
+        droppedPatternSteps.set(0);
+
         return true;
     }
 
     @Kroll.method
-    public boolean setVolume(KrollDict options) {
-        if (synthThread == null) return false;
+    public synchronized boolean setVolume(KrollDict options) {
+        if (synthThread == null) return reject(1);
         if (!acceptValidation("setVolume", SynthContract.validateSetVolume(options))) return false;
         double volume = readOptionalDoubleOption(options, "setVolume", "volume",
                 1.0, VOLUME_MIN, VOLUME_MAX);
@@ -169,8 +231,8 @@ public class TiSynthEngineModule extends KrollModule {
     }
 
     @Kroll.method
-    public boolean playTone(KrollDict options) {
-        if (synthThread == null) return false;
+    public synchronized boolean playTone(KrollDict options) {
+        if (synthThread == null) return reject(1);
         if (options == null) options = new KrollDict();
 
         double maxFreq = maxFrequencyHz();
@@ -248,12 +310,14 @@ public class TiSynthEngineModule extends KrollModule {
         if (dropped) {
             warnOnce("playTone", "queue", "overflow", "command_queue_full", "drop_newest");
         }
+        if(dropped) reject(2);
         return !dropped;
     }
 
     @Kroll.method
-    public boolean playChord(KrollDict options) {
-        if (synthThread == null || options == null) return false;
+    public synchronized boolean playChord(KrollDict options) {
+        if (synthThread == null) return reject(1);
+        if (options == null) return reject(0);
 
         double maxFreq = maxFrequencyHz();
         if (!acceptValidation("playChord", SynthContract.validateChord(options, maxFreq))) return false;
@@ -329,12 +393,14 @@ public class TiSynthEngineModule extends KrollModule {
         if (dropped) {
             warnOnce("playChord", "queue", "overflow", "command_queue_full", "drop_newest");
         }
+        if(dropped) reject(2);
         return !dropped;
     }
 
     @Kroll.method
-    public boolean playPattern(KrollDict options) {
-        if (synthThread == null || options == null) return false;
+    public synchronized boolean playPattern(KrollDict options) {
+        if (synthThread == null) return reject(1);
+        if (options == null) return reject(0);
 
         if (!acceptValidation("playPattern",
                 SynthContract.validatePattern(options, maxFrequencyHz()))) return false;
@@ -404,6 +470,7 @@ public class TiSynthEngineModule extends KrollModule {
         double globalDetune = readOptionalDoubleOption(options, "playPattern", "detune",
                 0.0, -SynthContract.MAX_DETUNE_CENTS, SynthContract.MAX_DETUNE_CENTS);
 
+        final SynthThread patternEngine = synthThread;
         final int patternId;
         final boolean replaced;
         synchronized (patternLock) {
@@ -528,15 +595,18 @@ public class TiSynthEngineModule extends KrollModule {
                 if (schedMs < 0) schedMs = 0;
 
                 scheduler.schedule(() -> {
-                    if (synthThread != null) {
+                  synchronized (TiSynthEngineModule.this) {
+                    if (synthThread == patternEngine && patternToken == patternId) {
                         boolean dropped = synthThread.enqueueNote(ff, fd, fa, fr, fv,
                                 fw, fp, fpe, ffe, flf, fld, fnr, fnre, flp,
                                 fpw, fpwe, fbd, fwt, null, 0, 100, fex);
                         if (dropped) {
+                            droppedPatternSteps.incrementAndGet();
                             warnOnce("playPattern", "queue", "overflow",
                                     "command_queue_full", "drop_newest");
                         }
                     }
+                  }
                 }, schedMs, TimeUnit.MILLISECONDS);
             }
 
@@ -545,6 +615,7 @@ public class TiSynthEngineModule extends KrollModule {
 
         long shutdownDelayMs = Math.max(1L, (long) Math.ceil(cumulativeMs) + 1L);
         scheduler.schedule(() -> {
+          synchronized (TiSynthEngineModule.this) {
             boolean completed;
             synchronized (patternLock) {
                 completed = patternPending && patternToken == patternId;
@@ -552,12 +623,13 @@ public class TiSynthEngineModule extends KrollModule {
             }
             if (completed) firePatternEnd(true);
             scheduler.shutdown();
+          }
         }, shutdownDelayMs, TimeUnit.MILLISECONDS);
         return true;
     }
 
     @Kroll.method
-    public void stopAll() {
+    public synchronized void stopAll() {
         if (synthThread == null) return;
         boolean dropped = synthThread.requestStopAll();
         if (dropped) {
@@ -566,16 +638,21 @@ public class TiSynthEngineModule extends KrollModule {
     }
 
     @Kroll.method
-    public void shutdown() {
+    public synchronized void shutdown() {
         if (patternScheduler != null) {
             patternScheduler.shutdownNow();
             patternScheduler = null;
         }
         synchronized (patternLock) {
             patternPending = false;
+            patternToken++;
         }
         if (synthThread == null) return;
+        lastStats=synthThread.stopAndGetStats();
         boolean dropped = synthThread.requestShutdown();
+        lastStats[0]=lastStats[2]=lastStats[3]=lastStats[5]=lastStats[13]=0;
+        lastStats[18]=Double.NaN;
+        for(int i=6;i<15;i++) if(i!=13) lastStats[i]=Double.NaN;
         if (dropped) {
             warnOnce("shutdown", "queue", "overflow", "command_queue_full", "fallback_control_flag");
         }
@@ -841,6 +918,7 @@ public class TiSynthEngineModule extends KrollModule {
 
     private boolean acceptValidation(String method, SynthContract.Validation validation) {
         if (validation.accepted) return true;
+        reject(0);
         warnOnce(method, validation.key, validation.reason, validation.value, "rejected");
         return false;
     }

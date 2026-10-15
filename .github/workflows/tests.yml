@@ -36,6 +36,13 @@ jobs:
           cc -std=c99 -O2 -Wall -Wextra -Wpedantic -o "$RUNNER_TEMP/spatial" tests/spatial_regression.c -lm
           "$RUNNER_TEMP/spatial"
 
+      - name: Shared statistics tests
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -include ./shared/synth_stats.h -x c -fsyntax-only /dev/null
+          c++ -std=c++17 -O2 -Wall -Wextra -pthread tests/stats_regression.cpp -o "$RUNNER_TEMP/stats"
+          "$RUNNER_TEMP/stats"
+          python3 tests/run_stats_java.py
+
       - name: Java contract and DSP tests
         working-directory: android
         run: |

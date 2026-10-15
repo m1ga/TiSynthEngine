@@ -2,6 +2,9 @@
 
 @interface TiSynthengineModule : TiModule
 
+- (NSDictionary *)getStats:(id)args;
+- (NSNumber *)setStatsEnabled:(id)args;
+- (void)resetStats:(id)args;
 - (NSDictionary *)getDefaults:(id)args;
 - (NSNumber *)startEngine:(id)args;
 - (NSNumber *)setVolume:(id)args;

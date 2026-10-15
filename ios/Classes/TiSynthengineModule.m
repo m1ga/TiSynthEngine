@@ -12,6 +12,7 @@
 #import <stdint.h>
 #include "../../shared/synth_core.h"
 #include "../../shared/synth_spatial.h"
+#include "../../shared/synth_stats.h"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -548,6 +549,10 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 // ---------------------------------------------------------------------------
 
 @interface TiSynthengineModule () {
+  SynthStats stats;
+  uint64_t statsRejected[3], droppedPatternSteps;
+  BOOL statsEnabled;
+  mach_timebase_info_data_t statsTimebase;
   AVAudioEngine      *audioEngine;
   AVAudioSourceNode  *sourceNode;
 
@@ -620,6 +625,8 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 - (void)startup
 {
   [super startup];
+  synth_stats_init(&stats);
+  mach_timebase_info(&statsTimebase);
   warningKeys = [[NSMutableSet alloc] init];
   engineSampleRate = DEFAULT_SAMPLE_RATE;
   engineMaxVoices  = 8;
@@ -645,6 +652,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 - (void)resumeAudioEngineAfterRouteChange:(NSString *)reason
 {
   dispatch_async(dispatch_get_main_queue(), ^{
+    @synchronized(self) {
     if (self->audioEngine == nil || [self->audioEngine isRunning]) return;
 
     NSError *sessionError = nil;
@@ -670,6 +678,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
     if (!started || engineError != nil) {
       DebugLog(@"[ERROR] Unable to resume audio after %@: %@",
                reason, engineError.localizedDescription);
+    }
     }
   });
 }
@@ -706,6 +715,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 - (BOOL)acceptValidation:(NSDictionary *)failure method:(NSString *)method
 {
   if (failure == nil) return YES;
+  __atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED);
   [self warnOnceMethod:method
                    key:[failure objectForKey:@"key"]
                 reason:[failure objectForKey:@"reason"]
@@ -845,6 +855,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
     voices[i].seqStepCount  = 0;
     tails[i].isActive       = false;
   }
+  synth_stats_stopped(&stats);
   // Clear lookahead buffer to prevent stale audio leaking after stop
   if (lookaheadL && lookaheadR) {
     memset(lookaheadL, 0, lookaheadSize * sizeof(double));
@@ -883,6 +894,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 - (void)snapshotTailFromVoice:(SynthVoice *)voice fadeSamples:(int)fadeSamples
 {
   TailVoice *tail = [self findTailSlot];
+  synth_stats_tail_start(&stats, tail->isActive);
   tail->isActive = true;
   tail->spatial = voice->spatial;
   if (tail->spatial) {
@@ -923,6 +935,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
     SynthVoice *voice = &voices[i];
     if (!voice->isActive) continue;
     [self snapshotTailFromVoice:voice fadeSamples:stopFadeSamples];
+    synth_stats_voice_end(&stats, voice->spatial);
     voice->isActive = false;
   }
 }
@@ -946,6 +959,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 {
   int slot    = [self findVoiceSlot];
   SynthVoice *v = &voices[slot];
+  synth_stats_voice_start(&stats, v->isActive, v->spatial, cmd->spatial);
   if (v->isActive) [self snapshotTailFromVoice:v fadeSamples:stealFadeSamples];
 
   v->isActive       = true;
@@ -1114,19 +1128,71 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 #pragma mark - Public APIs
 // ---------------------------------------------------------------------------
 
+- (NSDictionary *)getStats:(id)args
+{
+  @synchronized(self) {
+#pragma unused(args)
+  double v[SYNTH_STATS_COUNT]; synth_stats_read(&stats,v);
+  NSMutableDictionary *r=[NSMutableDictionary dictionary];
+  NSArray *keys=@[@"activeVoices",@"peakActiveVoices",@"tailVoices",@"spatialVoices",@"voiceStealCount",@"callbackFrames",@"renderLoad",@"peakRenderLoad"];
+  for(int i=0;i<8;i++) r[keys[i]]=isnan(v[i]) ? (id)[NSNull null] : @(v[i]);
+  r[@"outputPeakDbFS"]=isnan(v[ST_PEAK_L]) ? (id)[NSNull null] : @{@"left":@(v[ST_PEAK_L]),@"right":@(v[ST_PEAK_R])};
+  r[@"outputRmsDbFS"]=isnan(v[ST_RMS_L]) ? (id)[NSNull null] : @{@"left":@(v[ST_RMS_L]),@"right":@(v[ST_RMS_R])};
+  r[@"limiterReductionDb"]=isnan(v[ST_REDUCTION]) ? (id)[NSNull null] : @(v[ST_REDUCTION]);
+  os_unfair_lock_lock(&commandProducerLock);
+  uint32_t rd=atomic_load_explicit(&commandReadIndex,memory_order_acquire);
+  uint32_t wr=atomic_load_explicit(&commandWriteIndex,memory_order_acquire);
+  r[@"pendingCommands"]=@((wr+COMMAND_QUEUE_CAPACITY-rd)%COMMAND_QUEUE_CAPACITY);
+  os_unfair_lock_unlock(&commandProducerLock);
+  r[@"maxVoices"]=@(engineMaxVoices); r[@"sampleRate"]=@(engineSampleRate);
+  r[@"underrunCount"]=[NSNull null]; r[@"bufferFrames"]=[NSNull null]; r[@"estimatedOutputLatencyMs"]=[NSNull null];
+  uint64_t validation=synth_stats_load(&statsRejected[0]), stopped=synth_stats_load(&statsRejected[1]), full=synth_stats_load(&statsRejected[2]);
+  r[@"rejectedRequestsByReason"]=@{@"validation":@(validation),@"engineStopped":@(stopped),@"queueFull":@(full)};
+  r[@"rejectedRequestCount"]=@(validation+stopped+full);
+  r[@"droppedPatternStepCount"]=@(synth_stats_load(&droppedPatternSteps));
+  return r;
+  }
+}
+- (NSNumber *)setStatsEnabled:(id)args
+{
+  @synchronized(self) {
+  id enabled=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
+  if(![enabled isKindOfClass:[NSNumber class]] || CFGetTypeID((__bridge CFTypeRef)enabled)!=CFBooleanGetTypeID()) {
+    __atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED); return @NO;
+  }
+  statsEnabled=[enabled boolValue]; synth_stats_enable(&stats,statsEnabled); return @YES;
+  }
+}
+- (void)resetStats:(id)args
+{
+  @synchronized(self) {
+#pragma unused(args)
+  for(int i=0;i<3;i++) synth_stats_store(&statsRejected[i],0);
+  synth_stats_store(&droppedPatternSteps,0); synth_stats_reset(&stats);
+  }
+}
+
 - (NSDictionary *)getDefaults:(id)args
 {
+  @synchronized(self) {
 #pragma unused(args)
   return [TiSynthengineContract defaultsWithMaxFrequency:[self maxFrequencyHz]];
+  }
 }
 
 - (NSNumber *)startEngine:(id)args
 {
-  ENSURE_SINGLE_ARG_OR_NIL(args, NSDictionary);
-  NSDictionary *options = args != nil ? (NSDictionary *)args : @{};
+  @synchronized(self) {
+  id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
+  if(raw==nil) raw=@{};
+  if(![raw isKindOfClass:[NSDictionary class]]) { __atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED); return @NO; }
+  NSDictionary *options=raw;
   if (![self acceptValidation:[TiSynthengineContract validateStartEngine:options]
                        method:@"startEngine"]) return @NO;
   if (audioEngine != nil) return @YES;
+  SynthStats previousStats=stats;
+  int previousMaxVoices=engineMaxVoices;
+  double previousSampleRate=engineSampleRate;
 
   NSInteger maxVoices = 0;
   [self readOptionalIntegerFrom:options method:@"startEngine" key:@"maxVoices"
@@ -1172,6 +1238,10 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   [session setCategory:audioSessionCategory error:&sessionError];
   [session setActive:YES error:&sessionError];
 
+  if(sessionError != nil) {
+    engineMaxVoices=previousMaxVoices;
+    __atomic_fetch_add(&statsRejected[1],1,__ATOMIC_RELAXED); return @NO;
+  }
   double sessionSampleRate = [session sampleRate];
   engineSampleRate = (isfinite(sessionSampleRate) && sessionSampleRate > 0.0)
                    ? sessionSampleRate : DEFAULT_SAMPLE_RATE;
@@ -1200,6 +1270,8 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   atomic_store_explicit(&commandWriteIndex, 0, memory_order_relaxed);
   atomic_store_explicit(&commandReadIndex,  0, memory_order_relaxed);
 
+  synth_stats_init(&stats);
+  synth_stats_enable(&stats,statsEnabled);
   audioEngine = [[AVAudioEngine alloc] init];
   AVAudioFormat *format = [[AVAudioFormat alloc]
       initStandardFormatWithSampleRate:engineSampleRate channels:2];
@@ -1212,6 +1284,8 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
                   AVAudioFrameCount frameCount, AudioBufferList *outputData)
     {
 #pragma unused(isSilence, timestamp)
+      BOOL measure = synth_stats_begin(&module->stats);
+      uint64_t statsBegin = measure ? mach_absolute_time() : 0;
       // Process all pending commands
       if (atomic_exchange_explicit(&module->emergencyShutdownRequested, false,
                                    memory_order_acq_rel)) {
@@ -1266,14 +1340,14 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
         double mixL = 0.0;
         double mixR = 0.0;
 
-        for (int i = 0; i < module->engineMaxVoices; i++) {
+        if (module->stats.active > 0) for (int i = 0; i < module->engineMaxVoices; i++) {
           SynthVoice *v = &module->voices[i];
           if (!v->isActive) continue;
           if (v->spatial && v->samplesPlayed >= v->totalSamples) {
             float l, r;
             synth_spatial_process(&v->spatialState, 0, &l, &r);
             mixL += l; mixR += r;
-            if (--v->spatialDrain <= 0) v->isActive = false;
+            if (--v->spatialDrain <= 0) { v->isActive = false; synth_stats_voice_end(&module->stats,true); }
             continue;
           }
 
@@ -1373,18 +1447,18 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
           v->samplesPlayed++;
           if (v->samplesPlayed >= v->totalSamples) {
             if (v->spatial) v->currentEnvelope = 0;
-            else v->isActive = false;
+            else { v->isActive = false; synth_stats_voice_end(&module->stats,false); }
           }
         }
 
-        for (int i = 0; i < module->engineMaxVoices; i++) {
+        if (module->stats.tails > 0) for (int i = 0; i < module->engineMaxVoices; i++) {
           TailVoice *tail = &module->tails[i];
           if (!tail->isActive) continue;
           if (tail->spatial && tail->samplesRemaining <= 0) {
             float l, r;
             synth_spatial_process(&tail->spatialState, 0, &l, &r);
             mixL += l; mixR += r;
-            if (--tail->spatialDrain <= 0) tail->isActive = false;
+            if (--tail->spatialDrain <= 0) { tail->isActive = false; synth_stats_tail_end(&module->stats); }
             continue;
           }
           double wf = 0.0;
@@ -1429,7 +1503,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
             tail->fmModPhase -= floor(tail->fmModPhase);
           }
           tail->samplesRemaining--;
-          if (tail->samplesRemaining <= 0 && !tail->spatial) tail->isActive = false;
+          if (tail->samplesRemaining <= 0 && !tail->spatial) { tail->isActive = false; synth_stats_tail_end(&module->stats); }
         }
 
         // --- Stereo-linked lookahead peak limiter ---
@@ -1522,6 +1596,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 
         float fL = (float)ClampDouble(finalL, -1.0, 1.0);
         float fR = (float)ClampDouble(finalR, -1.0, 1.0);
+        if(measure) synth_stats_sample(&module->stats,fL,fR,module->smoothedGain,(int)module->engineSampleRate);
 
         if (outR != NULL) {
           outL[frame] = fL;
@@ -1534,6 +1609,8 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
         }
       }
 
+      double seconds = measure ? (mach_absolute_time()-statsBegin) * (double)module->statsTimebase.numer / module->statsTimebase.denom * 1e-9 : 0;
+      synth_stats_end(&module->stats,(int)frameCount,(int)module->engineSampleRate,seconds);
       return noErr;
     };
 
@@ -1548,19 +1625,28 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   }
 
   NSError *engineError = nil;
-  [audioEngine startAndReturnError:&engineError];
-  if (engineError != nil) {
+  BOOL started=[audioEngine startAndReturnError:&engineError];
+  if (!started || engineError != nil) {
     DebugLog(@"[ERROR] Unable to start audio engine: %@", engineError.localizedDescription);
+    [self shutdown:nil];
+    stats=previousStats; engineMaxVoices=previousMaxVoices; engineSampleRate=previousSampleRate;
+    __atomic_fetch_add(&statsRejected[1],1,__ATOMIC_RELAXED);
+    return @NO;
   }
-  return @(engineError == nil);
+  for(int i=0;i<3;i++) synth_stats_store(&statsRejected[i],0);
+  synth_stats_store(&droppedPatternSteps,0);
+  return @YES;
+  }
 }
 
 - (NSNumber *)setVolume:(id)args
 {
-  ENSURE_SINGLE_ARG(args, NSDictionary);
-  if (audioEngine == nil) return @NO;
+  @synchronized(self) {
+  if (audioEngine == nil) { __atomic_fetch_add(&statsRejected[1],1,__ATOMIC_RELAXED); return @NO; }
 
-  NSDictionary *options = (NSDictionary *)args;
+  id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
+  if(![raw isKindOfClass:[NSDictionary class]]) { __atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED); return @NO; }
+  NSDictionary *options=raw;
   if (![self acceptValidation:[TiSynthengineContract validateSetVolume:options]
                        method:@"setVolume"]) return @NO;
   double volume = 1.0;
@@ -1568,14 +1654,18 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
                   defaultValue:1.0 min:VOLUME_MIN max:VOLUME_MAX out:&volume];
   atomic_store_explicit(&masterVolume, volume, memory_order_relaxed);
   return @YES;
+  }
 }
 
 - (NSNumber *)playTone:(id)args
 {
-  ENSURE_SINGLE_ARG(args, NSDictionary);
-  if (audioEngine == nil || engineMaxVoices < 1) return @NO;
+  @synchronized(self) {
+  if (audioEngine == nil || engineMaxVoices < 1) { __atomic_fetch_add(&statsRejected[1],1,__ATOMIC_RELAXED); return @NO; }
 
-  NSDictionary *options = (NSDictionary *)args;
+  id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
+  if(raw==nil) raw=@{};
+  if(![raw isKindOfClass:[NSDictionary class]]) { __atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED); return @NO; }
+  NSDictionary *options=raw;
   double maxFreq = [self maxFrequencyHz];
   if (![self acceptValidation:[TiSynthengineContract validateTone:options maxFrequency:maxFreq]
                        method:@"playTone"]) return @NO;
@@ -1699,15 +1789,19 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
     [self warnOnceMethod:@"playTone" key:@"queue" reason:@"overflow"
                    value:@"command_queue_full" action:@"drop_newest"];
   }
+  if(dropped) __atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);
   return @(!dropped);
+  }
 }
 
 - (NSNumber *)playChord:(id)args
 {
-  ENSURE_SINGLE_ARG(args, NSDictionary);
-  if (audioEngine == nil || engineMaxVoices < 1) return @NO;
+  @synchronized(self) {
+  if (audioEngine == nil || engineMaxVoices < 1) { __atomic_fetch_add(&statsRejected[1],1,__ATOMIC_RELAXED); return @NO; }
 
-  NSDictionary *options = (NSDictionary *)args;
+  id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
+  if(![raw isKindOfClass:[NSDictionary class]]) { __atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED); return @NO; }
+  NSDictionary *options=raw;
   double maxFreq = [self maxFrequencyHz];
   if (![self acceptValidation:[TiSynthengineContract validateChord:options maxFrequency:maxFreq]
                        method:@"playChord"]) return @NO;
@@ -1833,15 +1927,19 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
     [self warnOnceMethod:@"playChord" key:@"queue" reason:@"overflow"
                    value:@"command_queue_full" action:@"drop_newest"];
   }
+  if(dropped) __atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);
   return @(!dropped);
+  }
 }
 
 - (NSNumber *)playPattern:(id)args
 {
-  ENSURE_SINGLE_ARG(args, NSDictionary);
-  if (audioEngine == nil || engineMaxVoices < 1) return @NO;
+  @synchronized(self) {
+  if (audioEngine == nil || engineMaxVoices < 1) { __atomic_fetch_add(&statsRejected[1],1,__ATOMIC_RELAXED); return @NO; }
 
-  NSDictionary *options = (NSDictionary *)args;
+  id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
+  if(![raw isKindOfClass:[NSDictionary class]]) { __atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED); return @NO; }
+  NSDictionary *options=raw;
   if (![self acceptValidation:[TiSynthengineContract validatePattern:options
                                                            maxFrequency:[self maxFrequencyHz]]
                        method:@"playPattern"]) return @NO;
@@ -2080,16 +2178,22 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
       if (schedMs < 0.0) schedMs = 0.0;
 
       int64_t delayNs = (int64_t)(schedMs * 1e6);
-      __unsafe_unretained TiSynthengineModule *weakSelf = self;
+      __weak TiSynthengineModule *weakSelf = self;
 
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delayNs), q, ^{
+        TiSynthengineModule *owner=weakSelf;
+        if(owner == nil) return;
+        @synchronized(owner) {
         // Check generation — skip if a newer pattern has been started
-        if (atomic_load_explicit(&weakSelf->patternGeneration, memory_order_relaxed)
+        if (atomic_load_explicit(&owner->patternGeneration, memory_order_relaxed)
             != generation) return;
-        BOOL dropped = [weakSelf enqueueCommand:cmd];
+        if(owner->audioEngine == nil) return;
+        BOOL dropped = [owner enqueueCommand:cmd];
         if (dropped) {
-          [weakSelf warnOnceMethod:@"playPattern" key:@"queue" reason:@"overflow"
+          __atomic_fetch_add(&owner->droppedPatternSteps,1,__ATOMIC_RELAXED);
+          [owner warnOnceMethod:@"playPattern" key:@"queue" reason:@"overflow"
                              value:@"command_queue_full" action:@"drop_newest"];
+        }
         }
       });
     }
@@ -2110,10 +2214,12 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
     }
   });
   return @YES;
+  }
 }
 
 - (void)stopAll:(id)args
 {
+  @synchronized(self) {
 #pragma unused(args)
   if (audioEngine == nil) return;
   BOOL dropped = [self enqueueSimpleCommand:CMD_STOP_ALL];
@@ -2121,10 +2227,12 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
     [self warnOnceMethod:@"stopAll" key:@"queue" reason:@"overflow"
                    value:@"command_queue_full" action:@"fallback_control_flag"];
   }
+  }
 }
 
 - (void)shutdown:(id)args
 {
+  @synchronized(self) {
 #pragma unused(args)
   if (audioEngine == nil) return;
 
@@ -2139,6 +2247,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   }
 
   [audioEngine stop];
+  synth_stats_stopped(&stats);
   sourceNode  = nil;
   audioEngine = nil;
 
@@ -2151,6 +2260,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   }
   atomic_store_explicit(&commandWriteIndex, 0, memory_order_relaxed);
   atomic_store_explicit(&commandReadIndex,  0, memory_order_relaxed);
+  }
 }
 
 // ---------------------------------------------------------------------------

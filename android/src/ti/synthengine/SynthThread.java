@@ -27,17 +27,17 @@ public final class SynthThread extends Thread {
         nativeHandle = nativeCreate(requestedMaxVoices, mixingProfile);
     }
 
-    public int getSampleRate() {
+    public synchronized int getSampleRate() {
         long handle = nativeHandle;
         return handle != 0 ? nativeGetSampleRate(handle) : 44100;
     }
 
-    public void setMasterVolume(double volume) {
+    public synchronized void setMasterVolume(double volume) {
         long handle = nativeHandle;
         if (handle != 0) nativeSetMasterVolume(handle, volume);
     }
 
-    public boolean enqueueNote(
+    public synchronized boolean enqueueNote(
             double frequency, int durationMs, int attackMs, int releaseMs, double volume,
             int waveType, double pan, double panEnd, double freqEnd,
             double lfoFreq, double lfoDepth,
@@ -52,7 +52,7 @@ public final class SynthThread extends Thread {
                 seqFreqs, seqStepCount, seqStepDurMs, extras);
     }
 
-    public boolean enqueueChord(
+    public synchronized boolean enqueueChord(
             double[] frequencies, int durationMs, int attackMs, int releaseMs,
             double volume, int waveType, double[] pans, double noiseRate,
             double lowPassHz, double pulseWidth, int bitDepth, double[] waveTable,
@@ -63,12 +63,12 @@ public final class SynthThread extends Thread {
                 lowPassHz, pulseWidth, bitDepth, waveTable, extras);
     }
 
-    public boolean requestStopAll() {
+    public synchronized boolean requestStopAll() {
         long handle = nativeHandle;
         return handle == 0 || nativeStopAll(handle);
     }
 
-    public boolean requestShutdown() {
+    public synchronized boolean requestShutdown() {
         long handle = nativeHandle;
         if (handle == 0) return false;
         nativeHandle = 0;
@@ -76,12 +76,23 @@ public final class SynthThread extends Thread {
         return false;
     }
 
+    public synchronized boolean startAudio() { return nativeHandle != 0 && nativeStart(nativeHandle); }
+
     @Override
-    public void run() {
+    public synchronized void run() {
         long handle = nativeHandle;
         if (handle != 0) nativeStart(handle);
     }
 
+    public synchronized double[] stopAndGetStats() {
+        if(nativeHandle == 0) return null;
+        nativeStatsControl(nativeHandle,3);
+        return nativeGetStats(nativeHandle);
+    }
+    public synchronized double[] getStats() { return nativeHandle == 0 ? null : nativeGetStats(nativeHandle); }
+    public synchronized void statsControl(int operation) { if(nativeHandle != 0) nativeStatsControl(nativeHandle, operation); }
+    private static native double[] nativeGetStats(long handle);
+    private static native void nativeStatsControl(long handle, int operation);
     private static native long nativeCreate(int maxVoices, int mixingProfile);
     private static native int nativeGetSampleRate(long handle);
     private static native boolean nativeStart(long handle);

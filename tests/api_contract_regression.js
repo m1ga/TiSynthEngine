@@ -44,6 +44,9 @@ assert(!androidModule.includes('options.get("audioSession")') && !androidNative.
   'Android validates audioSession without changing its output stream')
 
 const publicMethods = [
+  'getStats',
+  'resetStats',
+  'setStatsEnabled',
   'getDefaults',
   'startEngine',
   'playTone',
@@ -54,7 +57,7 @@ const publicMethods = [
   'shutdown'
 ]
 const androidPublicMethods = Array.from(androidModule.matchAll(
-  /@Kroll\.method\s+public\s+(?:boolean|void|KrollDict)\s+(\w+)\(/g
+  /@Kroll\.method\s+public\s+(?:synchronized\s+)?(?:boolean|void|KrollDict)\s+(\w+)\(/g
 ), match => match[1])
 const iosPublicMethods = Array.from(iosHeader.matchAll(
   /- \((?:NSDictionary \*|NSNumber \*|void)\)(\w+):/g
@@ -63,7 +66,7 @@ assert.deepStrictEqual(androidPublicMethods.sort(), publicMethods.slice().sort()
 assert.deepStrictEqual(iosPublicMethods.sort(), publicMethods.slice().sort(), 'iOS public method surface')
 
 ;['startEngine', 'setVolume', 'playTone', 'playChord', 'playPattern'].forEach((method) => {
-  assert(new RegExp(`public boolean ${method}\\(`).test(androidModule), `Android ${method} returns acceptance`)
+  assert(new RegExp(`public (?:synchronized )?boolean ${method}\\(`).test(androidModule), `Android ${method} returns acceptance`)
   assert(new RegExp(`\\(NSNumber \\*\\)${method}:`).test(iosModule), `iOS ${method} returns acceptance`)
 })
 
@@ -169,7 +172,7 @@ assert(!androidDsp.includes('normalizationReleaseCoeff'),
   'Android removes signal-dependent normalization')
 assert(!iosModule.includes('normalizationReleaseCoeff'),
   'iOS removes signal-dependent normalization')
-assert(androidThread.includes('public boolean enqueueChord('),
+assert(/public (?:synchronized )?boolean enqueueChord\(/.test(androidThread),
   'Android exposes an atomic internal chord transaction')
 assert(androidNative.includes('write_.store(write, std::memory_order_release)'),
   'Android publishes a native chord only after filling every command')
