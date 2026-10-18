@@ -5,13 +5,21 @@ if (!defaults || defaults.apiVersion !== '1.0.0') {
   throw new Error('TiSynthEngine 1.0.0 is required')
 }
 
+if (!defaults.limits || !defaults.limits.spatialX || !defaults.limits.spatialY
+  || typeof Synth.getStats !== 'function' || typeof Synth.resetStats !== 'function'
+  || typeof Synth.setStatsEnabled !== 'function') {
+  throw new Error('Install the current TiSynthEngine 1.0.0 packages, then rebuild and reinstall this app')
+}
+
 var WAVE = defaults.waveTypes
 var STEPPED_WAVE = [-1, -0.78, -0.16, 0.84, 1, 0.42, -0.2, -0.62]
 var engineRunning = false
 var startTimer = null
 var statsTimer = null
-// Opt in while diagnosing; the example adds no statistics UI.
-var LOG_AUDIO_STATS = false
+var diagnosticsEnabled = false
+var selectedSession = 'playback'
+var masterVolume = 1
+var binauralEnabled = true
 var interactiveControls = []
 
 var COLORS = {
@@ -53,7 +61,8 @@ function dp(value) {
 var win = Ti.UI.createWindow({
   backgroundColor: COLORS.canvas,
   layout: 'vertical',
-  navBarHidden: true
+  navBarHidden: true,
+  extendSafeArea: false
 })
 
 var scrollOptions = {
@@ -172,7 +181,7 @@ function makeHero() {
     fontWeight: 'bold',
     textAlign: Ti.UI.TEXT_ALIGNMENT_CENTER
   }))
-  hero.add(makeText('Explore oscillators, wave shaping, harmony and sequencing with the public API.', {
+  hero.add(makeText('Explore synthesis, sequencing, headphone positioning and engine diagnostics.', {
     top: dp(8),
     color: COLORS.textSecondary,
     fontSize: 14,
@@ -270,18 +279,18 @@ function makeAction(options) {
 
   function restoreColor() {
     action.backgroundColor = options.color
-    action.opacity = engineRunning ? 1 : 0.58
+    action.opacity = engineRunning || options.allowStopped ? 1 : 0.58
   }
 
   action.addEventListener('touchstart', function () {
-    if (!engineRunning) return
+    if (!engineRunning && !options.allowStopped) return
     action.backgroundColor = options.pressedColor || COLORS.surfaceMuted
     action.opacity = 0.9
   })
   action.addEventListener('touchend', restoreColor)
   action.addEventListener('touchcancel', restoreColor)
   action.addEventListener('click', function () {
-    if (!engineRunning) return
+    if (!engineRunning && !options.allowStopped) return
     restoreColor()
     setStatus(options.status || ('Playing ' + options.title), options.statusColor || options.color)
     var accepted = options.onPress()
@@ -290,7 +299,7 @@ function makeAction(options) {
     }
   })
 
-  interactiveControls.push(action)
+  interactiveControls.push({ view: action, allowStopped: !!options.allowStopped })
   return action
 }
 
@@ -310,7 +319,7 @@ function makeCompactAction(options) {
 }
 
 function playMatchedSine(note) {
-  Synth.playTone({
+  return Synth.playTone({
     note: note,
     duration: 600,
     attack: 10,
@@ -321,7 +330,7 @@ function playMatchedSine(note) {
 }
 
 function playMatchedArpeggio(pitchKey, pitches) {
-  Synth.playPattern({
+  return Synth.playPattern({
     attack: 5,
     release: 30,
     volume: 0.7,
@@ -377,7 +386,7 @@ waveNames.forEach(function (name, index) {
         waveType: waveTypes[index]
       }
       if (waveTypes[index] === WAVE.WAVETABLE) options.waveTable = STEPPED_WAVE
-      Synth.playTone(options)
+      return Synth.playTone(options)
     }
   }))
 })
@@ -415,7 +424,7 @@ noteDemos.forEach(function (demo, index) {
     pressedColor: COLORS.surfaceRaised,
     status: 'Note ' + demo.note + ' · sine at 70%',
     onPress: function () {
-      playMatchedSine(demo.note)
+      return playMatchedSine(demo.note)
     }
   }))
 })
@@ -437,7 +446,7 @@ motionSection.add(makeAction({
   pressedColor: COLORS.tealPressed,
   status: 'Pan sweep · left to right',
   onPress: function () {
-    Synth.playTone({
+    return Synth.playTone({
       frequency: 440,
       duration: 2000,
       attack: 20,
@@ -454,7 +463,7 @@ motionSection.add(makeAction({
   pressedColor: COLORS.pinkPressed,
   status: 'Pitch sweep · 200 to 900 Hz',
   onPress: function () {
-    Synth.playTone({
+    return Synth.playTone({
       frequency: 200,
       frequencyEnd: 900,
       duration: 400,
@@ -471,7 +480,7 @@ motionSection.add(makeAction({
   pressedColor: COLORS.orangePressed,
   status: 'LFO vibrato · 5 Hz',
   onPress: function () {
-    Synth.playTone({
+    return Synth.playTone({
       frequency: 440,
       duration: 2000,
       attack: 20,
@@ -500,7 +509,7 @@ retroSection.add(makeAction({
   pressedColor: COLORS.brownPressed,
   status: 'Filtered sample-and-hold noise sweep',
   onPress: function () {
-    Synth.playTone({
+    return Synth.playTone({
       frequency: 120,
       duration: 760,
       attack: 1,
@@ -520,7 +529,7 @@ retroSection.add(makeAction({
   pressedColor: COLORS.orangePressed,
   status: 'Square pulse-width sweep',
   onPress: function () {
-    Synth.playTone({
+    return Synth.playTone({
       note: 'A3',
       duration: 700,
       attack: 3,
@@ -538,7 +547,7 @@ retroSection.add(makeAction({
   pressedColor: COLORS.tealPressed,
   status: 'Custom stepped wavetable',
   onPress: function () {
-    Synth.playTone({
+    return Synth.playTone({
       note: 'D4',
       duration: 680,
       attack: 4,
@@ -607,7 +616,7 @@ harmonySection.add(makeAction({
   pressedColor: COLORS.blue,
   status: 'C major triad · sine',
   onPress: function () {
-    Synth.playChord({
+    return Synth.playChord({
       frequencies: [261.63, 329.63, 392.0],
       duration: 1200,
       attack: 20,
@@ -623,7 +632,7 @@ harmonySection.add(makeAction({
   pressedColor: COLORS.indigoPressed,
   status: 'C major chord · square and wide',
   onPress: function () {
-    Synth.playChord({
+    return Synth.playChord({
       notes: ['C4', 'E4', 'G4', 'C5'],
       duration: 1000,
       attack: 10,
@@ -652,7 +661,7 @@ sequenceSection.add(makeAction({
   pressedColor: COLORS.greenPressed,
   status: 'Matched arpeggio · frequencies',
   onPress: function () {
-    playMatchedArpeggio('frequency', [261.63, 329.63, 392.0, 523.25, 392.0, 329.63])
+    return playMatchedArpeggio('frequency', [261.63, 329.63, 392.0, 523.25, 392.0, 329.63])
   }
 }))
 sequenceSection.add(makeAction({
@@ -661,7 +670,7 @@ sequenceSection.add(makeAction({
   pressedColor: COLORS.greenPressed,
   status: 'Matched arpeggio · note names',
   onPress: function () {
-    playMatchedArpeggio('note', ['C4', 'E4', 'G4', 'C5', 'G4', 'E4'])
+    return playMatchedArpeggio('note', ['C4', 'E4', 'G4', 'C5', 'G4', 'E4'])
   }
 }))
 sequenceSection.add(makeAction({
@@ -671,7 +680,7 @@ sequenceSection.add(makeAction({
   textColor: COLORS.canvas,
   status: 'Melody pattern · 140 BPM',
   onPress: function () {
-    Synth.playPattern({
+    return Synth.playPattern({
       bpm: 140,
       swing: 0.1,
       steps: [
@@ -692,7 +701,7 @@ sequenceSection.add(makeAction({
   pressedColor: COLORS.brownPressed,
   status: 'Noise percussion · 120 BPM',
   onPress: function () {
-    Synth.playPattern({
+    return Synth.playPattern({
       bpm: 120,
       steps: [
         { frequency: 80, noteValue: '8n', volume: 0.9, waveType: WAVE.NOISE, attack: 2, release: 60 },
@@ -838,7 +847,7 @@ function onPatternEnd(event) {
 Synth.addEventListener('patternend', onPatternEnd)
 
 expressiveSection.add(makeAction({
-  title: 'PATTERN END\nTap twice to see completed and replaced',
+  title: 'PATTERN END\nTap once to finish; tap again quickly to replace',
   color: COLORS.yellow,
   pressedColor: COLORS.yellowPressed,
   textColor: COLORS.canvas,
@@ -870,7 +879,165 @@ expressiveSection.add(Ti.UI.createView({ height: dp(16) }))
 scrollView.add(expressiveSection)
 
 // ---------------------------------------------------------------------------
-// 8. Output controls
+// 8. Headphone positioning
+// ---------------------------------------------------------------------------
+
+var spatialSection = makeSection(
+  'Binaural headphone positioning',
+  'Use stereo headphones. Compare one noise burst at a time; elevation varies by listener. These controls affect this section only.',
+  COLORS.teal
+)
+var spatialModeLabel = makeText('Mode: binaural (front plane)', {
+  left: dp(16), right: dp(16), top: dp(8), fontSize: 12
+})
+var spatialModes = makeRow()
+;[true, false].forEach(function (enabled) {
+  spatialModes.add(makeGridAction({
+    title: enabled ? 'BINAURAL MODE' : 'STEREO MODE',
+    color: COLORS.teal, pressedColor: COLORS.tealPressed,
+    accessibilityHint: 'Changes placement for new sounds in this section',
+    onPress: function () {
+      binauralEnabled = enabled
+      spatialModeLabel.text = enabled ? 'Mode: binaural (front plane)' : 'Mode: stereo (horizontal only)'
+    }
+  }))
+})
+spatialSection.add(spatialModes)
+spatialSection.add(spatialModeLabel)
+
+function placement(x, y) {
+  // Never mix spatial coordinates with pan, panEnd, pans or panSpread.
+  return binauralEnabled ? { spatialX: x, spatialY: y } : { pan: x, panEnd: x }
+}
+
+var spatialPoints = [
+  ['TOP LEFT', -1, 1], ['TOP', 0, 1], ['TOP RIGHT', 1, 1],
+  ['LEFT', -1, 0], ['CENTER', 0, 0], ['RIGHT', 1, 0],
+  ['BOTTOM LEFT', -1, -1], ['BOTTOM', 0, -1], ['BOTTOM RIGHT', 1, -1]
+]
+var spatialRow
+spatialPoints.forEach(function (point, index) {
+  if (index % 3 === 0) { spatialRow = makeRow(); spatialSection.add(spatialRow) }
+  spatialRow.add(makeCompactAction({
+    title: point[0] + '\nNoise burst',
+    fontSize: 11, color: COLORS.teal, pressedColor: COLORS.tealPressed,
+    onPress: function () {
+      return Synth.playTone(Object.assign({
+        frequency: 200, waveType: WAVE.NOISE, duration: 550,
+        attack: 5, release: 200, volume: 0.3
+      }, placement(point[1], point[2])))
+    }
+  }))
+})
+spatialSection.add(makeAction({
+  title: 'SPATIAL CHORD\nOne fixed position above and right',
+  color: COLORS.blueDark, pressedColor: COLORS.blue,
+  onPress: function () {
+    var position = binauralEnabled ? { spatialX: 0.7, spatialY: 1 } : { panSpread: 0, pans: [0.7, 0.7, 0.7] }
+    return Synth.playChord(Object.assign({
+      notes: ['C4', 'E4', 'G4'], duration: 1200, attack: 15, release: 300,
+      volume: 0.4, waveType: WAVE.SAWTOOTH
+    }, position))
+  }
+}))
+spatialSection.add(makeAction({
+  title: 'SPATIAL PATTERN\nAbove left, below center, above right',
+  color: COLORS.indigo, pressedColor: COLORS.indigoPressed,
+  onPress: function () {
+    return Synth.playPattern({
+      stepDuration: 550, attack: 5, decay: 180, sustain: 0, release: 200,
+      volume: 0.3, waveType: WAVE.NOISE,
+      steps: [[-1, 1], [0, -1], [1, 1]].map(function (point) {
+        return Object.assign({ frequency: 200 }, placement(point[0], point[1]))
+      })
+    })
+  }
+}))
+spatialSection.add(Ti.UI.createView({ height: dp(16) }))
+scrollView.add(spatialSection)
+
+// ---------------------------------------------------------------------------
+// 9. Session policy and statistics
+// ---------------------------------------------------------------------------
+
+var sessionSection = makeSection(
+  'Audio session',
+  'On iOS, playback ignores silent mode; ambient respects it and mixes with other apps. Changing policy stops sounds and patterns, then restarts. Android accepts both without changing its output.',
+  COLORS.blue
+)
+var sessionLabel = makeText('Session: playback', { left: dp(16), right: dp(16), top: dp(8), fontSize: 12 })
+;['playback', 'ambient'].forEach(function (session) {
+  sessionSection.add(makeAction({
+    title: session.toUpperCase() + ' SESSION',
+    allowStopped: true,
+    color: COLORS.blueDark, pressedColor: COLORS.blue,
+    accessibilityHint: 'Restarts the engine with this session policy',
+    onPress: function () {
+      Synth.shutdown()
+      engineRunning = false
+      selectedSession = session
+      patternEndLabel.text = 'patternend: cancelled by shutdown (no event)'
+      return startAppCycles()
+    }
+  }))
+})
+sessionSection.add(sessionLabel)
+sessionSection.add(Ti.UI.createView({ height: dp(16) }))
+scrollView.add(sessionSection)
+
+var statsSection = makeSection(
+  'Engine statistics',
+  'Read counters without changing them. Optional diagnostics poll at 5 Hz; n/a means unmeasured or unavailable, not zero. Render load is not total app CPU.',
+  COLORS.orange
+)
+var statsLabel = makeText('Diagnostics: off. Tap READ STATS for basic counters.', {
+  left: dp(16), right: dp(16), top: dp(8), fontSize: 12
+})
+function measured(value, suffix) {
+  return typeof value === 'number' && isFinite(value) ? value.toFixed(2) + (suffix || '') : 'n/a'
+}
+function refreshStats() {
+  var stats = Synth.getStats()
+  statsLabel.text = 'Diagnostics: ' + (diagnosticsEnabled ? 'on' : 'off')
+    + '\nVoices: ' + stats.activeVoices + '/' + stats.maxVoices + ' (peak ' + stats.peakActiveVoices + ')'
+    + '\nSpatial: ' + stats.spatialVoices + ' | tails: ' + stats.tailVoices + ' | queued: ' + stats.pendingCommands
+    + '\nReplaced: ' + stats.voiceStealCount + ' | rejected: ' + stats.rejectedRequestCount + ' | dropped steps: ' + stats.droppedPatternStepCount
+    + '\nRender load: ' + (stats.renderLoad == null ? 'n/a' : measured(stats.renderLoad * 100, '%'))
+    + '\nPeak L/R: ' + measured(stats.outputPeakDbFS && stats.outputPeakDbFS.left) + '/' + measured(stats.outputPeakDbFS && stats.outputPeakDbFS.right) + ' dBFS'
+    + '\nBackend underruns: ' + measured(stats.underrunCount)
+}
+function stopStatsPolling() {
+  if (statsTimer !== null) clearInterval(statsTimer)
+  statsTimer = null
+}
+statsSection.add(makeAction({
+  title: 'READ STATS', color: COLORS.surfaceMuted, pressedColor: COLORS.surfaceRaised,
+  accessibilityHint: 'Reads statistics without resetting them',
+  onPress: refreshStats
+}))
+statsSection.add(makeAction({
+  title: 'TOGGLE DIAGNOSTICS', color: COLORS.orange, pressedColor: COLORS.orangePressed,
+  accessibilityHint: 'Enables or disables timing and signal measurements',
+  onPress: function () {
+    if (!Synth.setStatsEnabled(!diagnosticsEnabled)) return false
+    diagnosticsEnabled = !diagnosticsEnabled
+    stopStatsPolling()
+    if (diagnosticsEnabled) statsTimer = setInterval(refreshStats, 200)
+    refreshStats()
+    return true
+  }
+}))
+statsSection.add(makeAction({
+  title: 'RESET STATS', color: COLORS.surfaceMuted, pressedColor: COLORS.surfaceRaised,
+  accessibilityHint: 'Resets counters without stopping sounds or changing diagnostics',
+  onPress: function () { Synth.resetStats(); refreshStats() }
+}))
+statsSection.add(statsLabel)
+statsSection.add(Ti.UI.createView({ height: dp(16) }))
+scrollView.add(statsSection)
+
+// ---------------------------------------------------------------------------
+// 10. Output controls
 // ---------------------------------------------------------------------------
 
 var controlSection = makeSection(
@@ -888,7 +1055,7 @@ volumeValues.forEach(function (volume) {
     status: 'Master volume · ' + Math.round(volume * 100) + '%',
     accessibilityLabel: 'Set master volume to ' + Math.round(volume * 100) + ' percent',
     onPress: function () {
-      Synth.setVolume({ volume: volume })
+      return setMasterVolume(volume)
     }
   }))
 })
@@ -902,15 +1069,15 @@ boostRow.add(makeGridAction({
   status: 'Master volume · 150%',
   accessibilityLabel: 'Set master volume to 150 percent',
   onPress: function () {
-    Synth.setVolume({ volume: 1.5 })
+    return setMasterVolume(1.5)
   }
 }))
 boostRow.add(makeGridAction({
   title: 'STOP ALL\nRelease active voices',
   color: COLORS.redDark,
   pressedColor: COLORS.red,
-  status: 'All voices stopped',
-  accessibilityHint: 'Stops every active voice',
+  status: 'Active voices fading; pending pattern steps remain',
+  accessibilityHint: 'Fades current voices without cancelling future pattern steps',
   onPress: function () {
     Synth.stopAll()
   }
@@ -933,26 +1100,34 @@ win.add(scrollView)
 // Engine lifecycle
 // ---------------------------------------------------------------------------
 
+function setMasterVolume(volume) {
+  if (!Synth.setVolume({ volume: volume })) return false
+  masterVolume = volume
+  return true
+}
+
 function startAppCycles() {
   startTimer = null
   win.removeEventListener('postlayout', onFirstPostLayout)
-  if (Synth.startEngine({ maxVoices: 16, mixingProfile: 'conservative' }) === false) {
-    setStatus('Engine start failed', COLORS.red)
-    throw new Error('TiSynthEngine rejected the engine configuration')
-  }
-
-  engineRunning = true
-  if (LOG_AUDIO_STATS && Synth.setStatsEnabled(true)) {
-    statsTimer = setInterval(function () {
-      Ti.API.info(JSON.stringify(Synth.getStats()))
-    }, 200)
-  }
+  engineRunning = Synth.startEngine({ maxVoices: 16, mixingProfile: 'conservative', audioSession: selectedSession })
+  // Keep session controls available for retry if a native stream cannot open.
   scrollView.touchEnabled = true
   interactiveControls.forEach(function (control) {
-    control.applyProperties({ opacity: 1, touchEnabled: true })
+    var enabled = engineRunning || control.allowStopped
+    control.view.applyProperties({ opacity: enabled ? 1 : 0.58, touchEnabled: enabled })
   })
+  sessionLabel.text = 'Session: ' + selectedSession + (engineRunning ? '' : ' (start failed; tap a session to retry)')
+  if (!engineRunning) {
+    setStatus('Engine start failed; select a session to retry', COLORS.red)
+    return false
+  }
+  if (!setMasterVolume(masterVolume)) {
+    setStatus('Request rejected · master volume was not restored', COLORS.red)
+    return false
+  }
   setStatus('Audio ready · tap a demo', COLORS.green)
-  Ti.API.info('TiSynthEngine: example started after first postlayout')
+  refreshStats()
+  return true
 }
 
 function onFirstPostLayout() {
@@ -968,10 +1143,9 @@ function hideAndroidActionBar() {
 }
 
 function cleanup() {
-  if (statsTimer !== null) {
-    clearInterval(statsTimer)
-    statsTimer = null
-  }
+  stopStatsPolling()
+  Synth.setStatsEnabled(false)
+  diagnosticsEnabled = false
   Synth.removeEventListener('patternend', onPatternEnd)
   win.removeEventListener('postlayout', onFirstPostLayout)
   win.removeEventListener('open', hideAndroidActionBar)

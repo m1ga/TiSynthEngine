@@ -1,0 +1,135 @@
+// Exercise the actual example callbacks without a Titanium runtime. Native
+// audio acceptance is checked separately against the platform contracts.
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const vm = require('node:vm')
+const { test } = require('node:test')
+const source = fs.readFileSync(path.join(__dirname, '../example/app.js'), 'utf8')
+const recorded = []
+
+function playground() {
+  const widgets = [], timers = new Map(), intervals = new Map(), calls = []
+  let serial = 0, accepted = true
+  function widget(options = {}) {
+    const events = new Map()
+    const value = Object.assign({}, options, {
+      children: [], add(child) { this.children.push(child) },
+      applyProperties(props) { Object.assign(this, props) },
+      addEventListener(name, fn) { if (!events.has(name)) events.set(name, new Set()); events.get(name).add(fn) },
+      removeEventListener(name, fn) { events.get(name)?.delete(fn) },
+      fire(name, event = {}) { for (const fn of [...(events.get(name) || [])]) fn(event) },
+      open() {}, events
+    })
+    widgets.push(value)
+    return value
+  }
+  const synth = widget()
+  synth.getDefaults = () => ({ apiVersion: '1.0.0', limits: { spatialX: {}, spatialY: {} },
+    waveTypes: { SINE: 0, SQUARE: 1, SAWTOOTH: 2, TRIANGLE: 3, NOISE: 4, WAVETABLE: 5 } })
+  for (const method of ['startEngine', 'playTone', 'playChord', 'playPattern', 'setVolume', 'setStatsEnabled']) {
+    synth[method] = options => {
+      const call = { method, options: JSON.parse(JSON.stringify(options)) }
+      calls.push(call)
+      if (accepted) recorded.push(call)
+      return accepted
+    }
+  }
+  synth.shutdown = () => calls.push({ method: 'shutdown' })
+  synth.stopAll = () => calls.push({ method: 'stopAll' })
+  synth.resetStats = () => calls.push({ method: 'resetStats' })
+  synth.getStats = () => { calls.push({ method: 'getStats' }); return {
+    activeVoices: 0, maxVoices: 16, peakActiveVoices: 3, spatialVoices: 0, tailVoices: 0,
+    pendingCommands: 0, voiceStealCount: 0, rejectedRequestCount: 0, droppedPatternStepCount: 0,
+    renderLoad: null, outputPeakDbFS: null, underrunCount: null
+  } }
+  const app = widget()
+  vm.runInNewContext(source, {
+    require: () => synth,
+    Ti: { UI: new Proxy({}, { get: (_, key) => key.startsWith('create') ? widget : key }),
+      Platform: { osname: 'iphone' }, App: app, API: { info() {}, warn() {} } },
+    setTimeout(fn) { timers.set(++serial, fn); return serial }, clearTimeout(id) { timers.delete(id) },
+    setInterval(fn) { intervals.set(++serial, fn); return serial }, clearInterval(id) { intervals.delete(id) }
+  })
+  const win = widgets.find(w => w.navBarHidden)
+  const actions = () => widgets.filter(w => w.accessibilityLabel && w.events.has('click'))
+  const button = prefix => { const b = actions().find(w => w.children[0].text.startsWith(prefix)); assert(b, 'missing demo: ' + prefix); return b }
+  function click(prefix) { const b = button(prefix); assert(b.touchEnabled, prefix + ' is enabled'); b.fire('click') }
+  function settle() { for (const [id, fn] of [...timers]) { timers.delete(id); fn() } }
+  function start() { win.fire('postlayout'); settle() }
+  return { widgets, calls, win, synth, intervals, actions, click, start, settle,
+    reject() { accepted = false }, text: () => widgets.map(w => w.text || '').join('\n') }
+}
+
+test('every sound and volume button surfaces native rejection', () => {
+  const inventory = playground()
+  for (const action of inventory.actions()) {
+    const p = playground(); p.start(); p.reject()
+    const b = p.actions().find(button => button.children[0].text === action.children[0].text)
+    const before = p.calls.length
+    b.fire('click')
+    if (p.calls.slice(before).some(c => ['playTone', 'playChord', 'playPattern', 'setVolume'].includes(c.method))) {
+      assert.match(p.text(), /Request rejected/, b.children[0].text)
+    }
+  }
+})
+
+test('nine headphone directions omit stereo keys; stereo bypass omits coordinates', () => {
+  const p = playground(); p.start()
+  for (const [name, x, y] of [['TOP LEFT', -1, 1], ['TOP', 0, 1], ['TOP RIGHT', 1, 1],
+    ['LEFT', -1, 0], ['CENTER', 0, 0], ['RIGHT', 1, 0],
+    ['BOTTOM LEFT', -1, -1], ['BOTTOM', 0, -1], ['BOTTOM RIGHT', 1, -1]]) {
+    p.click(name + '\n')
+    const { options } = p.calls.at(-1)
+    assert.equal(options.spatialX, x); assert.equal(options.spatialY, y)
+    for (const key of ['pan', 'panEnd', 'pans', 'panSpread']) assert(!(key in options))
+  }
+  p.click('STEREO MODE'); p.click('TOP LEFT\n')
+  const { options } = p.calls.at(-1)
+  assert.equal(options.pan, -1)
+  assert(!('spatialX' in options) && !('spatialY' in options))
+  p.click('BINAURAL MODE'); p.click('SPATIAL CHORD'); p.click('SPATIAL PATTERN')
+})
+
+test('changing iOS session restarts the engine and restores master gain', () => {
+  const p = playground(); p.start(); p.click('50%')
+  const before = p.calls.length
+  p.click('AMBIENT SESSION')
+  const calls = p.calls.slice(before)
+  assert(calls.findIndex(c => c.method === 'shutdown') < calls.findIndex(c => c.method === 'startEngine'))
+  assert.equal(calls.find(c => c.method === 'startEngine').options.audioSession, 'ambient')
+  assert.equal(calls.find(c => c.method === 'setVolume').options.volume, 0.5)
+  p.click('PLAYBACK SESSION')
+  assert.equal(p.calls.filter(c => c.method === 'startEngine').at(-1).options.audioSession, 'playback')
+})
+
+test('diagnostic polling is opt-in, preserves null and cleans up the owner', () => {
+  const p = playground(); p.start()
+  assert.equal(p.intervals.size, 0)
+  p.click('READ STATS')
+  assert(!p.calls.some(c => c.method === 'resetStats'))
+  assert.match(p.text(), /n\/a/)
+  p.click('TOGGLE DIAGNOSTICS'); p.click('TOGGLE DIAGNOSTICS'); p.click('TOGGLE DIAGNOSTICS')
+  assert.equal(p.intervals.size, 1)
+  p.click('RESET STATS')
+  assert.equal(p.calls.filter(c => c.method === 'resetStats').length, 1)
+  p.synth.fire('patternend', { completed: false }); assert.match(p.text(), /replaced by a newer pattern/)
+  p.synth.fire('patternend', { completed: true }); assert.match(p.text(), /patternend: completed/)
+  p.win.fire('close')
+  assert.equal(p.intervals.size, 0)
+  assert.equal(p.synth.events.get('patternend').size, 0)
+  assert.equal(p.calls.filter(c => c.method === 'setStatsEnabled').at(-1).options, false)
+  assert.equal(p.calls.at(-1).method, 'shutdown')
+})
+
+test('closing before layout settles cancels delayed startup', () => {
+  const p = playground(); p.win.fire('postlayout'); p.win.fire('close'); p.settle()
+  assert(!p.calls.some(c => c.method === 'startEngine'))
+})
+
+test('all example playback requests can be exported for native contract validation', () => {
+  const p = playground(); p.start()
+  for (const b of p.actions()) b.fire('click')
+  p.win.fire('close')
+  if (process.env.SYNTH_EXAMPLE_REQUESTS) fs.writeFileSync(process.env.SYNTH_EXAMPLE_REQUESTS, JSON.stringify(recorded))
+})
