@@ -1,7 +1,6 @@
 # Guide
 
-This guide covers the normal path from installing TiSynthEngine to releasing
-the native audio resources when the owning screen closes.
+Install TiSynthEngine, start it after layout settles, and release its native audio resources when the owning screen closes.
 
 ## Install the module
 
@@ -10,8 +9,7 @@ For the unreleased beta, use the packages built from the current module source i
 - `ti.synthengine-android-1.0.0.zip`
 - `ti.synthengine-iphone-1.0.0.zip`
 
-Put the archives in the Titanium project root or install them through the
-Titanium CLI. Pin the same version for both platforms:
+Put the archives in the Titanium project root or install them through the Titanium CLI. Pin the same version for both platforms:
 
 ```xml
 <modules>
@@ -20,13 +18,11 @@ Titanium CLI. Pin the same version for both platforms:
 </modules>
 ```
 
-TiSynthEngine requires Titanium SDK 13.2.0.GA or newer. Android projects must
-compile against API 35 or newer. The iOS module requires iOS 15 or newer.
+TiSynthEngine requires Titanium SDK 13.2.0.GA or newer. Android projects must compile against API 35 or newer. The iOS module requires iOS 15 or newer.
 
 ## Load and verify the contract
 
-Require the module once in the code that owns audio. Check `apiVersion` before
-starting the engine so a stale native archive fails with a useful message.
+Require the module once in the code that owns audio. Check `apiVersion` before starting. During development, different beta binaries can report the same version; also check the [spatial limits](#detect-the-installed-feature) and [statistics methods](#read-engine-statistics) if the app needs those features.
 
 ```javascript
 var synth = require('ti.synthengine')
@@ -37,15 +33,11 @@ if (contract.apiVersion !== '1.0.0') {
 }
 ```
 
-`getDefaults()` works before the stream starts. Call it again after startup if
-you need the frequency ceiling for input validation, because that ceiling
-depends on the output sample rate.
+`getDefaults()` works before the stream starts. Call it again after startup if you need the frequency ceiling for input validation, because that ceiling depends on the output sample rate.
 
 ## Lifecycle
 
-Opening a low-latency stream while Titanium lays out the first window can cause
-an underrun on some Android devices. Register `postlayout` before `open()`, wait
-for a short quiet period, and cancel the timer if the window closes first.
+Opening a low-latency stream while Titanium lays out the first window can cause an underrun on some Android devices. Register `postlayout` before `open()`, wait for a short quiet period, and cancel the timer if the window closes first.
 
 ```javascript
 var running = false
@@ -56,8 +48,10 @@ function startAudio () {
   win.removeEventListener('postlayout', onPostLayout)
   running = synth.startEngine({
     maxVoices: 16,
-    mixingProfile: 'conservative'
+    mixingProfile: 'conservative',
+    audioSession: 'ambient'
   })
+  if (!running) Ti.API.warn('TiSynthEngine could not start; keep playback controls disabled')
 }
 
 function onPostLayout () {
@@ -85,9 +79,7 @@ win.addEventListener('close', closeAudio)
 win.open()
 ```
 
-Use one owner for the engine. Start it once, pass a small audio service to the
-screens that need it, and call `shutdown()` from the owner. A second
-`startEngine()` call is harmless, but it makes ownership and cleanup unclear.
+Use one owner for the engine. Start it once, pass a small audio service to the screens that need it, and call `shutdown()` from the owner. While the engine is running, another valid `startEngine()` call returns `true` and leaves the existing options in effect. Changing voice capacity, profile or session policy requires `shutdown()` and a new start. This example selects `ambient` for game/UI audio; the default remains `playback`. Android validates the session policy and leaves output unchanged.
 
 ## Play the first sound
 
@@ -104,9 +96,7 @@ var accepted = synth.playTone({
 if (!accepted) Ti.API.warn('The tone was rejected')
 ```
 
-Calls that create or change sound return `true` when accepted and `false` when
-rejected. During development, handle that result and inspect logcat or the
-Xcode console for the structured validation warning.
+Calls that create or change sound return `true` when accepted and `false` when rejected. During development, handle that result and inspect logcat or the Xcode console for the structured validation warning.
 
 ## Choose a pitch
 
@@ -117,13 +107,11 @@ synth.playTone({ frequency: 440 })
 synth.playTone({ note: 'A4' })
 ```
 
-Do not send both. Notes accept English names (`C#4`, `Bb3`) and solfege names
-(`DO4`, `FA#5`, `Sib3`). When the octave is omitted, octave 4 is used.
+Do not send both. Notes accept English names (`C#4`, `Bb3`) and solfege names (`DO4`, `FA#5`, `Sib3`). When the octave is omitted, octave 4 is used.
 
 ## Shape a tone
 
-The oscillator runs for `duration` milliseconds. `attack` controls the fade in
-and `release` controls the fade out; the time between them stays at full level.
+The oscillator runs for `duration` milliseconds. `attack` controls the fade in and `release` controls the fade out; the time between them stays at full level.
 
 ```javascript
 synth.playTone({
@@ -135,9 +123,7 @@ synth.playTone({
 })
 ```
 
-Explicit envelope values must fit inside `duration`. An attack equal to or
-longer than the duration is rejected, as is a release longer than the time left
-after attack.
+Explicit envelope values must fit inside `duration`. An attack equal to or longer than the duration is rejected, as is a release longer than the time left after attack.
 
 Tone options can also move during the event:
 
@@ -155,15 +141,11 @@ synth.playTone({
 })
 ```
 
-`frequencyEnd` creates a linear pitch sweep. `panEnd` moves the sound between
-channels. `lfoFreq` is the vibrato rate in hertz and `lfoDepth` is its depth in
-hertz.
+`frequencyEnd` creates a linear pitch sweep. `panEnd` moves the sound between channels. `lfoFreq` is the vibrato rate in hertz and `lfoDepth` is its depth in hertz.
 
 ## Settle, filter and modulate
 
-A flat envelope suits beeps. For plucks, keys and bells, add `decay` and
-`sustain`: the level falls from full scale to `sustain` over `decay`
-milliseconds and holds there until the release.
+A flat envelope suits beeps. For plucks, keys and bells, add `decay` and `sustain`: the level falls from full scale to `sustain` over `decay` milliseconds and holds there until the release.
 
 ```javascript
 synth.playTone({
@@ -177,13 +159,9 @@ synth.playTone({
 })
 ```
 
-`sustain` below 1 needs a nonzero `decay`, and `attack` plus `decay` must fit in
-`duration`. The 50 ms default attack counts, so set a short `attack` when the
-decay is long.
+`sustain` below 1 needs a nonzero `decay`, and `attack` plus `decay` must fit in `duration`. The 50 ms default attack counts, so set a short `attack` when the decay is long.
 
-`filterType` adds a resonant filter: `lowpass`, `highpass` or `bandpass`.
-`filterHz` is the cutoff, `filterQ` the resonance, and `filterHzEnd` sweeps the
-cutoff over the note.
+`filterType` adds a resonant filter: `lowpass`, `highpass` or `bandpass`. `filterHz` is the cutoff, `filterQ` the resonance, and `filterHzEnd` sweeps the cutoff over the note.
 
 ```javascript
 synth.playTone({
@@ -198,12 +176,9 @@ synth.playTone({
 })
 ```
 
-Any `filterHz`, `filterHzEnd` or `filterQ` without a `filterType` other than
-`none` is rejected with `filter_type_required`.
+Any `filterHz`, `filterHzEnd` or `filterQ` without a `filterType` other than `none` is rejected with `filter_type_required`.
 
-`fmDepth` makes a `SINE` voice an FM voice. `fmRatio` is the modulator
-frequency as a multiple of the carrier, and `fmDepthEnd` moves the modulation
-index over the note. Omit `fmDepthEnd` for no sweep; 0 is a real target.
+`fmDepth` makes a `SINE` voice an FM voice. `fmRatio` is the modulator frequency as a multiple of the carrier, and `fmDepthEnd` moves the modulation index over the note. Omit `fmDepthEnd` for no sweep; 0 is a real target.
 
 ```javascript
 synth.playTone({
@@ -218,8 +193,7 @@ synth.playTone({
 })
 ```
 
-`detune` shifts a pitch in cents. In a chord, `detunes` gives one offset per
-pitch, so repeating a note with small offsets thickens it:
+`detune` shifts a pitch in cents. In a chord, `detunes` gives one offset per pitch, so repeating a note with small offsets thickens it:
 
 ```javascript
 synth.playChord({
@@ -232,9 +206,7 @@ synth.playChord({
 
 ## Shape noise and waveforms
 
-Use `noiseRate` to hold each pseudo-random noise value instead of generating a
-new one every sample. A low rate sounds sparse and grainy; a high rate moves
-toward white noise. `noiseRateEnd` sweeps the update rate.
+Use `noiseRate` to hold each pseudo-random noise value instead of generating a new one every sample. A low rate sounds sparse and grainy; a high rate moves toward white noise. `noiseRateEnd` sweeps the update rate.
 
 ```javascript
 synth.playTone({
@@ -250,8 +222,7 @@ synth.playTone({
 })
 ```
 
-`lowPassHz` is a per-voice one-pole filter. `bitDepth` applies amplitude
-quantization from 2 to 16 bits. Zero disables either control.
+`lowPassHz` is a per-voice one-pole filter. `bitDepth` applies amplitude quantization from 2 to 16 bits. Zero disables either control.
 
 Square waves accept a duty cycle and a duty-cycle sweep:
 
@@ -266,8 +237,7 @@ synth.playTone({
 })
 ```
 
-For a caller-defined repeating shape, select `WAVETABLE` and provide 2 to 64
-samples from -1 to 1. The table is stepped rather than interpolated.
+For a caller-defined repeating shape, select `WAVETABLE` and provide 2 to 64 samples from -1 to 1. The table is stepped rather than interpolated.
 
 ```javascript
 synth.playTone({
@@ -294,11 +264,9 @@ synth.playChord({
 })
 ```
 
-The chord is placed on the audio queue atomically. Its voices also share a
-constant-power event gain. Several separate `playTone` calls are independent,
-can begin in different callbacks, and are hotter when summed.
+The chord is placed on the audio queue atomically. Its voices also share a constant-power event gain. Several separate `playTone` calls are independent, can begin in different callbacks, and are hotter when summed.
 
-Use `pans` when notes need deliberate positions. Supplied entries override `panSpread`; missing entries use the spread position, or remain centered when spread is 0. An array longer than the note array is rejected.
+Use `pans` to choose a position for each note. Supplied entries override `panSpread`; missing entries use the spread position, or remain centered when spread is 0. An array longer than the note array is rejected.
 
 ```javascript
 synth.playChord({
@@ -310,8 +278,7 @@ synth.playChord({
 
 ## Play a pattern
 
-A pattern contains 1 to 512 object steps. Each step must have exactly one of
-`note`, `frequency` or `rest: true`.
+A pattern contains 1 to 512 object steps. Each step must have exactly one of `note`, `frequency` or `rest: true`.
 
 ```javascript
 synth.playPattern({
@@ -328,22 +295,13 @@ synth.playPattern({
 })
 ```
 
-Step timing is chosen in this order: step `duration`, step `noteValue`, pattern
-`noteValue`, pattern `stepDuration`, then the 100 ms default. A step also
-inherits the pattern's envelope, decay, sustain, volume, waveform, pan, sweep,
-vibrato, noise, filter, resonant filter, FM, detune, pulse-width, wavetable and
-quantization options. Values set on the step override the inherited value.
+Step timing is chosen in this order: step `duration`, step `noteValue`, pattern `noteValue`, pattern `stepDuration`, then the 100 ms default. A step also inherits the pattern's envelope, decay, sustain, volume, waveform, pan, sweep, vibrato, noise, filter, resonant filter, FM, detune, pulse-width, wavetable and quantization options. Values set on the step override the inherited value.
 
-Only one pattern scheduler is active. Starting another pattern cancels the
-pending steps of the previous pattern. It does not stop voices that have
-already started.
+Only one pattern scheduler is active. Starting another pattern cancels the pending steps of the previous pattern. It does not stop voices that have already started.
 
 ## Know when a pattern ends
 
-Each accepted pattern produces one `patternend` event. `completed` is `true`
-when the pattern reaches its natural end and `false` when a newer pattern
-replaces it. Use it to chain jingles or to release state that follows a
-pattern.
+An accepted pattern produces one `patternend` event unless `shutdown()` discards it first. `completed` is `true` when the pattern reaches its natural end and `false` when a newer pattern replaces it. Use it to chain jingles or to release state that follows a pattern.
 
 ```javascript
 function onPatternEnd (event) {
@@ -353,9 +311,7 @@ function onPatternEnd (event) {
 synth.addEventListener('patternend', onPatternEnd)
 ```
 
-The listener belongs to the module, not to the pattern, so it outlives the
-screen unless you remove it. Add it to the same cleanup that calls
-`shutdown()`:
+The module keeps the listener across patterns, so it outlives the screen unless you remove it. Add it to the same cleanup that calls `shutdown()`:
 
 ```javascript
 function closeAudio () {
@@ -364,8 +320,9 @@ function closeAudio () {
 }
 ```
 
-`shutdown()` discards a pending pattern without an event, so a closing owner
-never receives a callback after cleanup.
+`shutdown()` discards a pending pattern without generating an event. Remove the listener and invalidate app-owned work during cleanup; an event already queued for JavaScript is not a cancellation mechanism. `stopAll()` generates no event and leaves future pattern steps scheduled.
+
+Sound can continue after the scheduler reports completion because of swing, callback timing and FIR draining. Only chain patterns while this owner controls the shared scheduler; events have no pattern identifier.
 
 ## Master level and stopping
 
@@ -374,28 +331,19 @@ synth.setVolume({ volume: 0.7 })
 synth.stopAll()
 ```
 
-Master volume is ramped to avoid a step in the output. `stopAll()` fades active
-voices, but it does not cancel future steps in the current pattern. Start a new
-pattern or call `shutdown()` when future scheduling must stop as well.
+Master volume is ramped to avoid a step in the output. `stopAll()` fades active voices, but it does not cancel future steps in the current pattern. Start a new pattern or call `shutdown()` when future scheduling must stop as well.
 
 ## Output route changes
 
-The native ports rebuild or resume their stream after headphones, Bluetooth or
-other output routes change. The note crossing the transition may end early;
-new notes can be played normally after the system settles. Do not restart the
-whole app for a route change.
+The native ports rebuild or resume their stream after headphones, Bluetooth or other output routes change. The note crossing the transition may end early; new notes can be played normally after the system settles. Do not restart the whole app for a route change.
 
-On iOS, `startEngine()` activates a `Playback` audio session by default. That
-ignores the silent switch and normally interrupts other audio. Pass
-`audioSession: 'ambient'` to respect the silent switch and mix with other apps;
-read [coexisting with other audio](recommendations.md#coexisting-with-other-audio)
-and test the final app on a device.
+On iOS, `startEngine()` activates a `Playback` audio session by default. That ignores the silent switch and normally interrupts other audio. Pass `audioSession: 'ambient'` to respect the silent switch and mix with other apps; read [coexisting with other audio](recommendations.md#coexisting-with-other-audio) and test the final app on a device.
 
 ## Integrate binaural in a 2D app
 
 The JavaScript app chooses a position for each sound; the native module generates and filters that voice. Installing the module or enabling an app switch does not convert existing `pan` calls into binaural calls. Update every playback path that should use positioning, including explosions, impacts, shots, lasers and repeated motor/thrust events. A central audio service can do this once for all effects that supply their current source position. Calls bypassing that service keep their existing behavior.
 
-Keep the synthesis recipe (pitch, waveform, duration, envelope, filters, FM and volume). Replace its placement fields when submitting the event. This is per-event processing inside the native ports using the shared KEMAR FIR, rather than a global platform spatial-audio switch.
+Keep the synthesis recipe (pitch, waveform, duration, envelope, filters, FM and volume), and replace its placement fields when submitting the event. The native ports process each event with the shared KEMAR FIR; there is no global platform spatial-audio switch.
 
 ### Detect the installed feature
 
@@ -414,28 +362,28 @@ If the limits are absent, disable the binaural switch and keep stereo playback. 
 
 `spatialX`/`spatialY` are signed directions from -1 to 1. A 0 to 100% amplitude slider scales the position derived from the object; it does not select a direction. At height 100%, an upper object remains above and a lower object remains below. At height 0%, both are at the front-center height, while binaural remains enabled. Direct direction sliders would instead need -100 to +100%, divided by 100.
 
-| App control | Effect |
-| --- | --- |
-| Binaural switch | Send spatial coordinates when on; omit both when off. |
+| App control                     | Effect                                                                                      |
+| ------------------------------- | ------------------------------------------------------------------------------------------- |
+| Binaural switch                 | Send spatial coordinates when on; omit both when off.                                       |
 | Horizontal amplitude, 0 to 100% | Scale each source's left/right coordinate; also controls stereo `pan` when binaural is off. |
-| Height amplitude, 0 to 100% | Scale each source's below/above coordinate; inactive in stereo mode. |
-| Master volume | Use `setVolume`; independent of direction and amplitude. |
+| Height amplitude, 0 to 100%     | Scale each source's below/above coordinate; inactive in stereo mode.                        |
+| Master volume                   | Use `setVolume`; independent of direction and amplitude.                                    |
 
-These are app preferences, not options for `startEngine` or additional native methods. Keep the app's chosen defaults and saved preferences; the module does not impose a 100% slider default. Persist them in the app if they should survive restart. A switch change applies to newly submitted events, without restarting the engine or repositioning voices already playing.
+Store these settings as app preferences; `startEngine` does not accept them, and they have no separate native methods. Keep the app's chosen defaults and saved preferences; the module does not impose a 100% slider default. Persist them in the app if they should survive restart. A switch change applies to newly submitted events, without restarting the engine or repositioning voices already playing.
 
 With both amplitude controls at 100%, screen positions map as follows:
 
-| Position | `spatialX` | `spatialY` |
-| --- | ---: | ---: |
-| Top left | -1 | 1 |
-| Top center | 0 | 1 |
-| Top right | 1 | 1 |
-| Middle left | -1 | 0 |
-| Center | 0 | 0 |
-| Middle right | 1 | 0 |
-| Bottom left | -1 | -1 |
-| Bottom center | 0 | -1 |
-| Bottom right | 1 | -1 |
+| Position      | `spatialX` | `spatialY` |
+| ------------- | ---------: | ---------: |
+| Top left      |         -1 |          1 |
+| Top center    |          0 |          1 |
+| Top right     |          1 |          1 |
+| Middle left   |         -1 |          0 |
+| Center        |          0 |          0 |
+| Middle right  |          1 |          0 |
+| Bottom left   |         -1 |         -1 |
+| Bottom center |          0 |         -1 |
+| Bottom right  |          1 |         -1 |
 
 ### Convert screen positions when playing a tone
 
@@ -537,12 +485,53 @@ if (!synth.playPattern({
 
 Use stereo headphones and compare isolated broadband noise above/below before testing many collisions. Perceived elevation varies with the listener, headphones and spectrum; low sine tones are weak tests. The output is still stereo, with a front plane and no rear sources, distance attenuation, room reflections or head tracking. A 100% slider uses the modeled directional range; it does not guarantee strong localization for every person.
 
-CPU cost depends on concurrent spatial voices and their short tails, not the total number of effects over a game. Measure the intended device and realistic event overlap. Host replay is a comparison tool, not device CPU, battery, heat or underrun evidence. See [the renderer](audio-engine.md#binaural-front-plane-renderer) and [diagnostic checks](troubleshooting.md#binaural-does-not-change-the-position).
+Measure CPU cost on the intended device with realistic event overlap. The cost depends on concurrent spatial voices and their short tails; the total number of effects over a game does not determine it. Host replay supports comparisons but does not measure device CPU, battery, heat or underruns. See [the renderer](audio-engine.md#binaural-front-plane-renderer) and [diagnostic checks](troubleshooting.md#binaural-does-not-change-the-position).
+
+## Read engine statistics
+
+Basic counters are available without enabling optional diagnostics. Reads do not start audio or reset counters. Detect the methods if supporting older development packages that also report 1.0.0:
+
+```javascript
+var statsTimer = null
+var statsSupported = typeof synth.getStats === 'function' &&
+  typeof synth.setStatsEnabled === 'function' && typeof synth.resetStats === 'function'
+
+function readStats () {
+  var stats = synth.getStats()
+  Ti.API.info('Voices: ' + stats.activeVoices + '/' + stats.maxVoices)
+  Ti.API.info('Render load: ' + (stats.renderLoad === null
+    ? 'unmeasured' : (stats.renderLoad * 100).toFixed(1) + '%'))
+}
+
+function startDiagnostics () {
+  if (!statsSupported || statsTimer !== null) return false
+  if (!synth.setStatsEnabled(true)) return false
+  statsTimer = setInterval(readStats, 200)
+  return true
+}
+
+function stopDiagnostics () {
+  if (statsTimer !== null) clearInterval(statsTimer)
+  statsTimer = null
+  if (statsSupported) synth.setStatsEnabled(false)
+}
+
+// Read basic counters without enabling timing or signal meters:
+if (statsSupported) readStats()
+// When the user requests diagnostics: startDiagnostics()
+// When the diagnostic view hides, the app backgrounds or the owner closes:
+// stopDiagnostics()
+// To reset accumulated counters deliberately, without stopping playback:
+// if (statsSupported) synth.resetStats()
+```
+
+Integrate `stopDiagnostics()` into the existing owner's hide/background/close handlers, before shutdown. Resume polling only while the diagnostic view is active; do not add a second engine owner. Timing and output meters stay `null` until enabled and measured. Basic counters remain available when diagnostics are off. Android backend underrun/buffer/latency fields are best-effort and independent of that switch; iOS returns `null` for those backend fields. A zero underrun count does not prove clean sound.
+
+See the [complete field contract](api.md#getstats), [measurement limits](stats-performance.md) and [interactive statistics controls](../example/README.md#statistics).
 
 ## Next steps
 
 - [API reference](api.md) for every accepted key and limit.
 - [Sound design](sound-design.md) for waveform, envelope, filter and FM recipes.
 - [Examples](examples.md) for copy-ready sounds and patterns.
-- [Troubleshooting](troubleshooting.md) when a call returns `false` or audio is
-  silent.
+- [Troubleshooting](troubleshooting.md) when a call returns `false` or audio is silent.

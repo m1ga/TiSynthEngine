@@ -1,7 +1,6 @@
 # Examples
 
-Every snippet on this page uses the TiSynthEngine 1.0.0 contract. Unless a
-snippet includes startup code, it assumes the engine is already running.
+Every snippet on this page uses the TiSynthEngine 1.0.0 contract. Unless a snippet includes startup code, it assumes the engine is already running.
 
 ```javascript
 var synth = require('ti.synthengine')
@@ -26,8 +25,10 @@ function onPostLayout () {
     win.removeEventListener('postlayout', onPostLayout)
     started = synth.startEngine({
       maxVoices: 16,
-      mixingProfile: 'conservative'
+      mixingProfile: 'conservative',
+      audioSession: 'ambient'
     })
+    if (!started) Ti.API.warn('Audio startup failed; keep playback controls disabled')
   }, 250)
 }
 
@@ -41,6 +42,8 @@ win.addEventListener('postlayout', onPostLayout)
 win.addEventListener('close', cleanup)
 win.open()
 ```
+
+The startup example uses `ambient` for game/UI feedback. On iOS it respects silent mode and mixes with other apps. The module default is `playback`; Android validates either value without changing its output. Shut down before changing the policy. Use the [interactive session controls](../example/README.md#audio-session) to compare them.
 
 ## Built-in waveforms
 
@@ -80,8 +83,7 @@ synth.playTone({
 })
 ```
 
-`noiseRate` starts at 12 kHz and falls to 600 Hz. `lowPassHz` removes high
-frequency energy after the 8-bit source quantizer.
+`noiseRate` starts at 12 kHz and falls to 600 Hz. `lowPassHz` removes high frequency energy after the 8-bit source quantizer.
 
 ## Pulse-width sweep
 
@@ -115,8 +117,7 @@ synth.playTone({
 })
 ```
 
-The table repeats as a stepped cycle. `bitDepth: 8` quantizes each table value
-before filtering and the amplitude envelope.
+The table repeats as a stepped cycle. `bitDepth: 8` quantizes each table value before filtering and the amplitude envelope.
 
 ## Fixed controls on a chord
 
@@ -135,8 +136,7 @@ synth.playChord({
 })
 ```
 
-Chord voices share fixed shaping controls. Sweep fields such as
-`pulseWidthEnd` and `noiseRateEnd` are not accepted by `playChord()`.
+Chord voices share fixed shaping controls. Sweep fields such as `pulseWidthEnd` and `noiseRateEnd` are not accepted by `playChord()`.
 
 ## Wave-shaping pattern overrides
 
@@ -174,9 +174,7 @@ synth.playPattern({
 })
 ```
 
-Pattern roots provide inherited values. Each sounding step can override the
-source and any shaping control; a `WAVETABLE` step needs a local or inherited
-`waveTable`.
+Pattern roots provide inherited values. Each sounding step can override the source and any shaping control; a `WAVETABLE` step needs a local or inherited `waveTable`.
 
 ## Pitch sweep and pan movement
 
@@ -194,8 +192,7 @@ synth.playTone({
 })
 ```
 
-Set `frequencyEnd: 0` to keep the starting pitch. Set `panEnd` equal to `pan`
-when no stereo movement is wanted.
+Set `frequencyEnd: 0` to keep the starting pitch. Set `panEnd` equal to `pan` when no stereo movement is wanted.
 
 ## Vibrato
 
@@ -212,8 +209,7 @@ synth.playTone({
 })
 ```
 
-`lfoFreq` and `lfoDepth` are both in hertz. A depth of 6 Hz is gentle around
-E4; use your ears when moving the same setting to a much lower note.
+`lfoFreq` and `lfoDepth` are both in hertz. A depth of 6 Hz is gentle around E4; use your ears when moving the same setting to a much lower note.
 
 ## Chord with an even spread
 
@@ -243,8 +239,7 @@ synth.playChord({
 })
 ```
 
-Use `playChord` for a known simultaneous group. Launching four separate tones
-is not atomic and gives each one full event gain.
+Use `playChord` for a known simultaneous group. Launching four separate tones is not atomic and gives each one full event gain.
 
 ## Tempo, note values and swing
 
@@ -288,11 +283,7 @@ synth.playPattern({
 })
 ```
 
-Each `duration` sets both the voice length and the advance to the next step.
-The 90 ms tones followed by 20 ms rests put the first four notes 110 ms apart;
-the last tone lasts 180 ms. Rests provide actual silence. `release` only fades
-within a sounding step, not a separate gate. The pattern root does not accept
-`duration`, and `stepDuration` is only a fallback when a step has no timing.
+Each `duration` sets both the voice length and the advance to the next step. The 90 ms tones followed by 20 ms rests put the first four notes 110 ms apart; the last tone lasts 180 ms. Rests provide actual silence. `release` only fades within a sounding step, not a separate gate. The pattern root does not accept `duration`, and `stepDuration` is only a fallback when a step has no timing.
 
 ## Step overrides
 
@@ -339,11 +330,7 @@ synth.playPattern({
 })
 ```
 
-The steps retain the sixteenth-note grid. Short decay with `sustain: 0` makes
-each hit settle to silence before its step ends, without changing that grid.
-Every sounding step needs `frequency` or `note`, including a noise step. Do not
-write a primitive step such as `200`; primitive steps return
-`invalid_step_type`.
+The steps retain the sixteenth-note grid. Short decay with `sustain: 0` makes each hit settle to silence before its step ends, without changing that grid. Every sounding step needs `frequency` or `note`, including a noise step. Do not write a primitive step such as `200`; primitive steps return `invalid_step_type`.
 
 ## Xylophone sketch
 
@@ -366,8 +353,7 @@ setTimeout(function () { playBar('G5', 0.3) }, 260)
 setTimeout(function () { playBar('C6', 0.75) }, 390)
 ```
 
-These are deliberately independent strikes. Their releases overlap, so leave
-headroom in `volume` and choose enough `maxVoices` for the tails.
+These strikes are independent events. Their releases overlap, so leave headroom in `volume` and choose enough `maxVoices` for the tails.
 
 ## Simon-style pads
 
@@ -400,9 +386,7 @@ function playAllPads () {
 
 ## Pluck and electric piano
 
-`decay` and `sustain` turn a flat tone into an instrument. The electric piano
-adds an FM index that falls with the level, so the attack is bright and the
-tail is mellow.
+`decay` and `sustain` shape the tone into a plucked or struck sound. The electric piano also lowers the FM index as the level falls, giving it a bright attack and a mellow tail.
 
 ```javascript
 function pluck (note) {
@@ -453,8 +437,7 @@ synth.playTone({
 })
 ```
 
-A fractional `fmRatio` puts the overtones between harmonics, which reads as
-metal. `fmDepthEnd: 0` lets the brightness die away completely.
+A fractional `fmRatio` puts the overtones between harmonics, which reads as metal. `fmDepthEnd: 0` lets the brightness die away completely.
 
 ## Wah and filtered laser
 
@@ -539,8 +522,7 @@ synth.playPattern({
 
 ## Detuned chords
 
-Repeat a pitch with small offsets in `detunes` to make it beat and widen. Two
-copies 12 cents apart at 440 Hz beat about three times a second.
+Repeat a pitch with small offsets in `detunes` to make it beat and widen. Two copies 12 cents apart at 440 Hz beat about three times a second.
 
 ```javascript
 synth.playChord({
@@ -569,8 +551,7 @@ setTimeout(function () {
 }, 2400)
 ```
 
-Each repeated pitch is a voice. The second chord needs `maxVoices` of at least
-6.
+Each repeated pitch is a voice. The second chord needs `maxVoices` of at least 6.
 
 ## Chain patterns with `patternend`
 
@@ -604,14 +585,11 @@ playNextJingle()
 synth.removeEventListener('patternend', onPatternEnd)
 ```
 
-The event reports `completed: false` when another pattern replaces the running
-one, so a listener that only chains on `completed: true` never double-starts.
+The event reports `completed: false` when another pattern replaces the running one, so this handler does not chain from replacement. It assumes exclusive ownership of the module's single scheduler; another owner's later completion could otherwise trigger it. `shutdown()` discards a pending pattern without generating an event. Completion is not a guarantee of audible silence.
 
 ## Rules across keys
 
-Some combinations are rejected even when every value is in range. This call
-returns `false` with `sustain_without_decay`, because a sustain below 1 with no
-decay would jump in level and click:
+Some combinations are rejected even when every value is in range. This call returns `false` with `sustain_without_decay`, because a sustain below 1 with no decay would jump in level and click:
 
 ```javascript
 // Rejected on purpose: sustain needs a decay.
@@ -632,9 +610,7 @@ var accepted = synth.startEngine({
 if (accepted) synth.setVolume({ volume: 0.85 })
 ```
 
-This profile lowers source gain and the limiter ceiling. It cannot repair a
-speaker that physically struggles with a very low pitch, so test the real
-device and raise the pitch when needed.
+This profile lowers source gain and the limiter ceiling. It cannot repair a speaker that physically struggles with a very low pitch, so test the real device and raise the pitch when needed.
 
 ## Validation at an input boundary
 
@@ -650,9 +626,7 @@ function playUserFrequency (input) {
 }
 ```
 
-The native contract rejects bad values rather than clamping them. Validation in
-the app lets you give the user a specific message before the call reaches the
-module.
+The native contract rejects invalid values without clamping them. Validation in the app lets you give the user a specific message before the call reaches the module.
 
 ## Stop and clean up
 
@@ -663,14 +637,13 @@ synth.stopAll()
 synth.shutdown()
 ```
 
-`stopAll()` fades current voices but leaves pending pattern scheduling alone.
-`shutdown()` cancels the scheduler and releases the native stream.
+`stopAll()` fades current voices but leaves pending pattern scheduling alone. `shutdown()` cancels the scheduler and releases the native stream.
 
-The complete interactive demo is in [`example/app.js`](../example/app.js).
+Follow the [interactive demo setup and test checklist](../example/README.md) to run [`example/app.js`](../example/app.js). It includes headphone positioning, session selection, pattern completion/replacement and all three statistics methods. For a service-level statistics recipe, see [read engine statistics](guide.md#read-engine-statistics).
 
 ## Positioned headphone effect
 
-Check the installed coordinate limits and keep the engine running. This JavaScript places one generated noise effect above and to the right; it does not change other sound calls:
+With the engine running, check the installed coordinate limits. This example places one generated noise effect above and to the right. Other sound calls keep their existing placement:
 
 ```javascript
 if (!contract.limits.spatialX || !contract.limits.spatialY) {

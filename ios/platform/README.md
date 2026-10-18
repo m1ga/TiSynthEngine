@@ -2,14 +2,10 @@ For the public 1.0.0 API, waveform constants and attack/release envelopes, see:
 
 - `../../README.md`
 
-Files in this folder are copied directory into the iOS build directory
-when the iOS app is compiled:
+The iOS build copies files from this folder into its build directory:
 
     <project-dir>/build/iphone
 
-You can place files such as asset catalog files, .framework files and storyboards in this
-directory.
+Place asset catalogs, .framework files and storyboards in this directory.
 
-Files in this directory are copied directly on top of whatever files are already
-in the build directory, so please be careful that your files don't clobber
-essential project files or files from other modules.
+These files overwrite files with the same names in the build directory. Check for conflicts with essential project files or files from other modules.

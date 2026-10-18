@@ -2,11 +2,11 @@
 
 TiSynthEngine is a native synthesizer for Titanium apps on Android and iOS. It generates tones, chords, sweeps, noise and timed patterns without bundled audio files. Optional `spatialX` and `spatialY` provide headphone positioning on a front plane; see [binaural positioning](documentation/api.md#binaural-front-plane-positioning) and [app integration](documentation/guide.md#integrate-binaural-in-a-2d-app).
 
-The public module id is `ti.synthengine` and the current API version is `1.0.0`, an unreleased beta for the planned first public release.
+The module id is `ti.synthengine`. API version `1.0.0` is an unreleased beta for the first public release.
 
 ## What it is for
 
-TiSynthEngine works well for game and interface feedback, retro effects, alarms, notes, chords, arpeggios and simple noise-based percussion. Decay and sustain, a resonant filter, FM and detune extend that to plucks, keys, bells and thick pads.
+Use TiSynthEngine for game and interface feedback, retro effects, alarms, notes, chords, arpeggios and simple noise-based percussion. Decay and sustain, a resonant filter, FM and detune also produce plucks, keys, bells and thick pads.
 
 It is a synthesizer, not a sample player. It does not decode `.wav` or `.mp3` files, loop a voice indefinitely, or return handles for individual notes. See [known limits](documentation/recommendations.md#known-limits) before using it for a long-running music or ambience system.
 
@@ -48,7 +48,8 @@ if (contract.apiVersion !== '1.0.0') {
 
 if (synth.startEngine({
   maxVoices: 16,
-  mixingProfile: 'conservative'
+  mixingProfile: 'conservative',
+  audioSession: 'ambient'
 }) === false) {
   throw new Error('The audio engine could not start')
 }
@@ -56,7 +57,9 @@ if (synth.startEngine({
 synth.playTone({ note: 'A4' })
 ```
 
-Call `shutdown()` when the screen or app that owns the audio closes.
+This game-oriented example uses `ambient`: on iOS it respects silent mode and mixes with other apps. The module default is `playback`, which ignores silent mode. Android validates this option without changing its output. Changing the session policy requires `shutdown()` followed by `startEngine()`.
+
+Call `shutdown()` when the screen or app that owns the audio closes. To try every public method, follow the [interactive example setup and test checklist](example/README.md).
 
 ## Start after layout
 
@@ -94,21 +97,21 @@ Apps that start ads, remote configuration or entry animations may need a longer 
 
 The module exposes exactly eleven methods and one event, `patternend`.
 
-| Method                 | Returns   | What it does                                                                |
-| ---------------------- | --------- | --------------------------------------------------------------------------- |
-| `getStats()`           | `Object`  | Returns basic counters and enabled diagnostics; see the [stats contract](documentation/api.md#getstats). |
-| `resetStats()`         | nothing   | Resets accumulated statistics without stopping sounds. |
-| `setStatsEnabled(bool)` | `Boolean` | Enables optional timing and signal measurements (off by default). |
-| `getDefaults()`        | `Object`  | Reports the API version, defaults, limits, profiles and waveform constants. |
-| `startEngine(options)` | `Boolean` | Opens the native stream and fixes its voice capacity and mixing profile.    |
-| `playTone(options)`    | `Boolean` | Plays one pitch with optional sweep, pan movement and vibrato.              |
-| `playChord(options)`   | `Boolean` | Starts 1 to 32 pitches as one atomic event.                                 |
-| `playPattern(options)` | `Boolean` | Schedules 1 to 512 structured note or rest steps.                           |
-| `setVolume(options)`   | `Boolean` | Changes the master level with a short ramp.                                 |
-| `stopAll()`            | nothing   | Releases all sounding voices through a short fade.                          |
-| `shutdown()`           | nothing   | Stops the stream, cancels pending pattern steps and frees resources.        |
+| Method                  | Returns   | What it does                                                                                             |
+| ----------------------- | --------- | -------------------------------------------------------------------------------------------------------- |
+| `getStats()`            | `Object`  | Returns basic counters and enabled diagnostics; see the [stats contract](documentation/api.md#getstats). |
+| `resetStats()`          | nothing   | Resets accumulated statistics without stopping sounds.                                                   |
+| `setStatsEnabled(bool)` | `Boolean` | Enables optional timing and signal measurements (off by default).                                        |
+| `getDefaults()`         | `Object`  | Reports the API version, defaults, limits, profiles and waveform constants.                              |
+| `startEngine(options)`  | `Boolean` | Opens the native stream and fixes its voice capacity and mixing profile.                                 |
+| `playTone(options)`     | `Boolean` | Plays one pitch with optional sweep, pan movement and vibrato.                                           |
+| `playChord(options)`    | `Boolean` | Starts 1 to 32 pitches as one atomic event.                                                              |
+| `playPattern(options)`  | `Boolean` | Schedules 1 to 512 structured note or rest steps.                                                        |
+| `setVolume(options)`    | `Boolean` | Changes the master level with a short ramp.                                                              |
+| `stopAll()`             | nothing   | Releases all sounding voices through a short fade.                                                       |
+| `shutdown()`            | nothing   | Stops the stream, cancels pending pattern steps and frees resources.                                     |
 
-The five configurable calls return `true` when accepted. A `false` result means the payload was rejected, the engine is not running, the stream could not open, or the command queue was full.
+The six Boolean methods return `true` when accepted. A `false` result means the payload was rejected, the engine is not running, the stream could not open, or the command queue was full.
 
 ## Strict options
 
@@ -166,20 +169,20 @@ synth.playTone({
 })
 ```
 
-| Constant   | Value | Character                                                 |
-| ---------- | ----: | --------------------------------------------------------- |
-| `SINE`     |   `0` | Pure fundamental; useful for clean pitches and low notes. |
-| `SQUARE`   |   `1` | Hollow, bright and suited to retro sounds.                |
-| `SAWTOOTH` |   `2` | Dense harmonic spectrum with a buzzy edge.                |
-| `TRIANGLE` |   `3` | Softer than square, with more body than sine.             |
-| `NOISE`    |   `4` | White or sample-and-hold noise for hits and texture.      |
-| `WAVETABLE` |  `5` | A repeating stepped table supplied by the caller.         |
+| Constant    | Value | Character                                                 |
+| ----------- | ----: | --------------------------------------------------------- |
+| `SINE`      |   `0` | Pure fundamental; useful for clean pitches and low notes. |
+| `SQUARE`    |   `1` | Hollow, bright and suited to retro sounds.                |
+| `SAWTOOTH`  |   `2` | Dense harmonic spectrum with a buzzy edge.                |
+| `TRIANGLE`  |   `3` | Softer than square, with more body than sine.             |
+| `NOISE`     |   `4` | White or sample-and-hold noise for hits and texture.      |
+| `WAVETABLE` |   `5` | A repeating stepped table supplied by the caller.         |
 
 Square and sawtooth use PolyBLEP band-limiting. Noise is unpitched, so its `frequency` value does not change the sound. `WAVETABLE` requires `waveTable` with 2 to 64 values from -1 to 1.
 
 ## Wave-shaping controls
 
-The shaping controls add variable-rate sample-and-hold noise, a per-voice low-pass filter, variable pulse width, custom wavetables and optional amplitude quantization. All of them are optional and disabled by default.
+Optional shaping controls include variable-rate sample-and-hold noise, a per-voice low-pass filter, variable pulse width, custom wavetables and amplitude quantization. These controls are disabled by default.
 
 ```javascript
 synth.playTone({
@@ -318,7 +321,7 @@ The command is atomic. The render thread sees the complete chord or none of it, 
 
 Separate `playTone` calls are independent events. They are appropriate for unrelated touches or collisions, but several of them can produce a hotter sum than the same notes in one chord.
 
-`maxVoices` is capacity, not a volume control. When the pool is full, the engine steals the voice with the least time remaining and gives it a short tail.
+`maxVoices` sets voice capacity without changing volume. When the pool is full, the engine steals the voice with the least time remaining and gives it a short tail.
 
 ## Patterns
 
@@ -346,7 +349,7 @@ Step length uses step `duration`, step `noteValue`, pattern `noteValue`, pattern
 
 Only one pattern can be pending. Starting a new pattern cancels the future steps of the old one. `stopAll()` releases the notes already sounding but does not cancel future steps. Start a one-step rest or call `shutdown()` to cancel them.
 
-Every accepted pattern ends with one `patternend` event. `completed` is `true` at the natural end and `false` when a newer pattern replaces it. Remove the listener when the owner closes:
+An accepted pattern reports `patternend` unless `shutdown()` cancels it first. `completed` is `true` at the natural end and `false` when a newer pattern replaces it. Calling `stopAll()` leaves future steps scheduled and emits no event; `shutdown()` cancels them without an event. Sound may remain after the scheduler finishes. Remove the listener when the owner closes:
 
 ```javascript
 function onPatternEnd (event) {
@@ -355,6 +358,18 @@ function onPatternEnd (event) {
 
 synth.addEventListener('patternend', onPatternEnd)
 ```
+
+## Binaural headphone positioning
+
+Send `spatialX` (left/right) and `spatialY` (below/above), each from -1 to 1, on a tone, chord or pattern. Either coordinate enables binaural; omit both for ordinary stereo. Never combine them with `pan`, `panEnd`, `pans` or `panSpread`, including inherited pattern fields. Positions stay fixed for each event.
+
+Use stereo headphones and broadband noise to compare height. This is a front plane with two-channel output, without rear sources or head tracking. The [integration guide](documentation/guide.md#integrate-binaural-in-a-2d-app) covers app switches and coordinate conversion; the [interactive example](example/README.md#headphone-positioning) offers nine positions and a stereo comparison.
+
+## Engine statistics
+
+`getStats()` reads counters without resetting them. `setStatsEnabled(true)` enables optional callback timing and signal meters; `resetStats()` clears accumulated statistics without stopping playback. Diagnostics default off. Display `null` as unavailable or unmeasured so it remains distinct from zero.
+
+See the [integration and cleanup recipe](documentation/guide.md#read-engine-statistics) and [statistics field reference](documentation/api.md#getstats). Render load measures callback work; it does not measure total app CPU.
 
 ## Mixing profiles
 
