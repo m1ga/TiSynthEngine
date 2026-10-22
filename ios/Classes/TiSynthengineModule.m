@@ -11,6 +11,8 @@
 #import <stdatomic.h>
 #import <stdint.h>
 #include "../../shared/synth_core.h"
+#include "../../shared/synth_held.h"
+#include "../../shared/synth_modulation.h"
 #include "../../shared/synth_spatial.h"
 #include "../../shared/synth_stats.h"
 
@@ -61,6 +63,15 @@
 // ---------------------------------------------------------------------------
 
 typedef struct {
+  SynthHeld held;
+  SynthModulation modulation;
+  BOOL modulating;
+  uint32_t modulationFrames;
+  uint64_t sequenceGeneration;
+  double sequenceOffBeat;
+  int sequenceStep,sequenceMidi;
+  SynthLive live;
+  double eventGain;
   bool   isActive;
   bool spatial;
   SynthSpatial spatialState;
@@ -166,6 +177,15 @@ typedef struct {
 // ---------------------------------------------------------------------------
 
 typedef struct {
+  int32_t voiceId;
+  SynthModulationConfig modulation;
+  BOOL hasModulations;
+  SynthEffectsConfig processing;
+  uint64_t sequenceGeneration;
+  double sequenceOffBeat;
+  int sequenceStep,sequenceMidi;
+  uint32_t liveMask;
+  double liveValues[SYNTH_LIVE_COUNT];
   int    type;
   BOOL spatial;
   double spatialX, spatialY;
@@ -548,7 +568,32 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 // Module interface
 // ---------------------------------------------------------------------------
 
+static unsigned StudioModCapabilities(int wave,int filter) {
+ return (filter?SYNTH_MOD_CAP_FILTER:0)|(wave==1?SYNTH_MOD_CAP_PWM:0)|(wave==0?SYNTH_MOD_CAP_FM:0);
+}
+static unsigned StudioModCapabilitiesFromMask(uint32_t mask) {
+ return ((mask&(1u<<LIVE_FILTER_HZ))?SYNTH_MOD_CAP_FILTER:0)|((mask&(1u<<LIVE_PULSE_WIDTH))?SYNTH_MOD_CAP_PWM:0)|((mask&(1u<<LIVE_FM_DEPTH))?SYNTH_MOD_CAP_FM:0);
+}
+static SynthModulationConfig StudioModulationFromValues(const double *v) {
+ SynthModulationConfig m=synth_modulation_default_config();
+ for(int i=0;i<2;i++){const double *p=v+i*6;m.lfo[i].enabled=(int)p[0];m.lfo[i].waveform=(int)p[1];m.lfo[i].target=(int)p[2];m.lfo[i].rateHz=p[3];m.lfo[i].depth=p[4];m.lfo[i].syncBeats=p[5];}return m;
+}
+static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rate) {
+ SynthCommand c;memset(&c,0,sizeof(c));c.type=SYNTH_CMD_HELD_ON;c.volume=v->volume;c.pan=c.panEnd=v->pan;
+ c.attackSamples=MsToSamples(v->attack,rate);c.decaySamples=MsToSamples(v->decay,rate);c.releaseSamples=MsToSamples(v->release,rate);c.sustain=v->sustain;
+ c.waveType=v->waveType;c.lfoFreq=v->lfoFreq;c.lfoDepth=v->lfoDepth;c.noiseRate=v->noiseRate;c.lowPassHz=v->lowPassHz;c.pulseWidth=v->pulseWidth;c.bitDepth=v->bitDepth;
+ c.filterType=v->filterType;c.filterHz=v->filterHz;c.filterQ=v->filterQ;c.fmRatio=v->fmRatio;c.fmDepth=v->fmDepth;
+ c.spatial=v->spatial;c.spatialX=v->spatialX;c.spatialY=v->spatialY;c.wavetableSize=v->wavetableSize;memcpy(c.wavetable,v->wavetable,sizeof(c.wavetable));
+ c.modulation=StudioModulationFromValues(v->mods);c.hasModulations=v->mods[0]||v->mods[6];return c;
+}
+
 @interface TiSynthengineModule () {
+  SynthSequenceTransport *sequence;
+  NSMutableDictionary *sequenceOptions;
+  SynthEffects effects;
+  SynthEffectsConfig processingOptions;
+  int32_t sequenceVoiceId;
+  uint32_t sequenceAppliedRevision;
   SynthStats stats;
   uint64_t statsRejected[3], droppedPatternSteps;
   BOOL statsEnabled;
@@ -560,6 +605,8 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   double engineSampleRate;
 
   SynthVoice    voices[ABSOLUTE_MAX_VOICES];
+  SynthLiveIdentity identities[ABSOLUTE_MAX_VOICES];
+  uint64_t voiceOrder;
   TailVoice     tails[ABSOLUTE_MAX_VOICES];
   SynthCommand  commandQueue[COMMAND_QUEUE_CAPACITY];
 
@@ -824,6 +871,8 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 {
   for (int i = 0; i < ABSOLUTE_MAX_VOICES; i++) {
     voices[i].isActive      = false;
+    memset(&voices[i].held,0,sizeof(SynthHeld));
+    synth_identity_set(&identities[i],0,0);
     voices[i].phase         = 0.0;
     voices[i].phaseIncrement= 0.0;
     voices[i].totalSamples  = 0;
@@ -937,42 +986,61 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
     [self snapshotTailFromVoice:voice fadeSamples:stopFadeSamples];
     synth_stats_voice_end(&stats, voice->spatial);
     voice->isActive = false;
+    synth_identity_set(&identities[i],0,0);
   }
 }
 
-- (int)findVoiceSlot
+- (int)findVoiceSlotForCommand:(const SynthCommand *)cmd
 {
-  int fallbackIndex = 0;
-  int minRemaining  = INT_MAX;
-  for (int i = 0; i < engineMaxVoices; i++) {
-    if (!voices[i].isActive) return i;
-    int remaining = MAX(0, voices[i].totalSamples - voices[i].samplesPlayed);
-    if (remaining < minRemaining) {
-      minRemaining  = remaining;
-      fallbackIndex = i;
+  BOOL heldPool=cmd->voiceId!=0;
+  for(int i=0;i<engineMaxVoices;i++) {
+    if(voices[i].isActive && cmd->voiceId && voices[i].held.voiceId==cmd->voiceId)return i;
+    if(voices[i].isActive && voices[i].held.voiceId)heldPool=YES;
+  }
+  int slot=-1, leastRemaining=INT_MAX; BOOL chosenRelease=NO;
+  for(int i=0;i<engineMaxVoices;i++) {
+    SynthVoice *v=&voices[i]; if(!v->isActive)return i;
+    int remaining=v->totalSamples-v->samplesPlayed;
+    BOOL releasing=v->held.voiceId ? v->held.releasing!=0 : remaining<=v->releaseSamples;
+    if(slot<0 || (heldPool ? (releasing!=chosenRelease ? releasing : v->held.order<voices[slot].held.order) : remaining<leastRemaining)) {
+      slot=i; leastRemaining=remaining; chosenRelease=releasing;
     }
   }
-  return fallbackIndex;
+  return slot;
 }
 
 - (void)startVoiceFromCommand:(const SynthCommand *)cmd
 {
-  int slot    = [self findVoiceSlot];
+  int slot    = [self findVoiceSlotForCommand:cmd];
   SynthVoice *v = &voices[slot];
+  BOOL replacing=v->isActive;
   synth_stats_voice_start(&stats, v->isActive, v->spatial, cmd->spatial);
   if (v->isActive) [self snapshotTailFromVoice:v fadeSamples:stealFadeSamples];
 
   v->isActive       = true;
+  v->sequenceGeneration=cmd->sequenceGeneration;v->sequenceOffBeat=cmd->sequenceOffBeat;
+  v->sequenceStep=cmd->sequenceStep;v->sequenceMidi=cmd->sequenceMidi;
+  synth_modulation_init(&v->modulation,engineSampleRate);
+  v->modulationFrames=0;v->modulating=cmd->hasModulations;
+  if(cmd->hasModulations)synth_modulation_set_config(&v->modulation,&cmd->modulation,StudioModCapabilities(cmd->waveType,cmd->filterType));
+  memset(&v->held,0,sizeof(v->held)); v->held.voiceId=cmd->voiceId; v->held.order=++voiceOrder;
+  synth_identity_set(&identities[slot],cmd->voiceId,synth_live_allowed(cmd->waveType,cmd->filterType));
   v->spatial = cmd->spatial;
   if (v->spatial) {
     synth_spatial_init(&v->spatialState, cmd->spatialX, cmd->spatialY, engineSampleRate);
     v->spatialDrain = v->spatialState.taps - 1;
   }
   v->phase          = 0.0;
-  v->totalSamples   = MAX(1, cmd->durationSamples);
+  v->totalSamples   = cmd->voiceId ? INT_MAX : MAX(1, cmd->durationSamples);
   v->samplesPlayed  = 0;
   v->attackSamples  = MAX(0, cmd->attackSamples);
+  if(cmd->voiceId && replacing)v->attackSamples=MAX(v->attackSamples,stealFadeSamples);
   v->releaseSamples = MAX(0, cmd->releaseSamples);
+    if(cmd->voiceId) {
+      int edge=synth_held_edge_samples(engineSampleRate);
+      v->attackSamples=MAX(v->attackSamples,edge);
+      v->releaseSamples=MAX(v->releaseSamples,edge);
+    }
   v->currentEnvelope= 0.0;
   v->waveType       = ClampInt(cmd->waveType, 0, 5);
   v->volume         = ClampDouble(cmd->volume, VOLUME_MIN, VOLUME_MAX)
@@ -1080,6 +1148,12 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
     v->fmDepthDelta = 0.0;
   }
 
+  if(cmd->voiceId) {
+    v->eventGain=VoiceGainForEvent(mixingProfile,v->waveType,cmd->eventVoiceCount);
+    double values[SYNTH_LIVE_COUNT]={cmd->frequency,cmd->volume,cmd->filterHz,cmd->filterQ,cmd->lfoFreq,cmd->lfoDepth,cmd->pulseWidth,cmd->fmRatio,cmd->fmDepth};
+    synth_live_init(&v->live,values); v->fmActive=v->waveType==0;
+  }
+
   // Noise seed
   v->noiseState = (uint64_t)(mach_absolute_time()) ^ ((uint64_t)(slot + 1) * 0x9e3779b97f4a7c15ULL);
   v->heldNoise = LcgNoise(&v->noiseState);
@@ -1115,6 +1189,35 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   return NO;
 }
 
+- (int)voiceMaskForId:(int32_t)voiceId
+{
+  os_unfair_lock_lock(&commandProducerLock);
+  int result=-1;
+  for(int i=0;i<engineMaxVoices;i++){int found=synth_identity_mask(&identities[i],voiceId);if(found>=0)result=found;}
+  uint32_t rd=atomic_load_explicit(&commandReadIndex,memory_order_acquire),wr=atomic_load_explicit(&commandWriteIndex,memory_order_acquire);
+  while(rd!=wr) {
+    SynthCommand *c=&commandQueue[rd];
+    if(c->type==SYNTH_CMD_HELD_ON && c->voiceId==voiceId)result=(int)synth_live_allowed(c->waveType,c->filterType);
+    rd=(rd+1)%COMMAND_QUEUE_CAPACITY;
+  }
+  os_unfair_lock_unlock(&commandProducerLock);
+  return result;
+}
+
+- (void)applyHeldCommand:(const SynthCommand *)cmd
+{
+  for(int i=0;i<engineMaxVoices;i++) {
+    SynthVoice *v=&voices[i];
+    if(!v->isActive || v->held.voiceId!=cmd->voiceId)continue;
+    if(cmd->type==SYNTH_CMD_HELD_OFF)synth_held_release(&v->held,v->currentEnvelope);
+    else if(!(cmd->liveMask & ~synth_live_allowed(v->waveType,v->svf.type))) {
+      synth_live_update(&v->live,cmd->liveMask,cmd->liveValues,MAX(1,MsToSamples(10,engineSampleRate)));
+      if(cmd->hasModulations && synth_modulation_set_config(&v->modulation,&cmd->modulation,StudioModCapabilities(v->waveType,v->svf.type)))v->modulating=YES;
+    }
+    break;
+  }
+}
+
 // Convenience for CMD_STOP_ALL / CMD_SHUTDOWN
 - (BOOL)enqueueSimpleCommand:(int)type
 {
@@ -1139,6 +1242,8 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   r[@"outputPeakDbFS"]=isnan(v[ST_PEAK_L]) ? (id)[NSNull null] : @{@"left":@(v[ST_PEAK_L]),@"right":@(v[ST_PEAK_R])};
   r[@"outputRmsDbFS"]=isnan(v[ST_RMS_L]) ? (id)[NSNull null] : @{@"left":@(v[ST_RMS_L]),@"right":@(v[ST_RMS_R])};
   r[@"limiterReductionDb"]=isnan(v[ST_REDUCTION]) ? (id)[NSNull null] : @(v[ST_REDUCTION]);
+  r[@"preLimiterPeakDb"]=isnan(v[ST_PRE_LIMITER_PEAK]) ? (id)[NSNull null] : @(v[ST_PRE_LIMITER_PEAK]);
+  r[@"maxLimiterReductionDb"]=isnan(v[ST_MAX_REDUCTION]) ? (id)[NSNull null] : @(v[ST_MAX_REDUCTION]);
   os_unfair_lock_lock(&commandProducerLock);
   uint32_t rd=atomic_load_explicit(&commandReadIndex,memory_order_acquire);
   uint32_t wr=atomic_load_explicit(&commandWriteIndex,memory_order_acquire);
@@ -1270,6 +1375,15 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   atomic_store_explicit(&commandWriteIndex, 0, memory_order_relaxed);
   atomic_store_explicit(&commandReadIndex,  0, memory_order_relaxed);
 
+  sequence=calloc(1,sizeof(*sequence));
+  if(!sequence || !synth_effects_init(&effects,engineSampleRate)) {
+    if(sequence){free(sequence);sequence=NULL;}
+    if(lookaheadL){free(lookaheadL);lookaheadL=NULL;}if(lookaheadR){free(lookaheadR);lookaheadR=NULL;}
+    if(lookaheadPeaks){free(lookaheadPeaks);lookaheadPeaks=NULL;}if(lookaheadPeakIndices){free(lookaheadPeakIndices);lookaheadPeakIndices=NULL;}
+    return @NO;
+  }
+  synth_sequence_init(sequence,engineSampleRate);sequenceOptions=nil;sequenceVoiceId=0;sequenceAppliedRevision=0;
+  processingOptions=synth_effects_default_config();
   synth_stats_init(&stats);
   synth_stats_enable(&stats,statsEnabled);
   audioEngine = [[AVAudioEngine alloc] init];
@@ -1293,6 +1407,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
       }
       if (atomic_exchange_explicit(&module->emergencyStopRequested, false,
                                    memory_order_acq_rel)) {
+        synth_sequence_request_stop(module->sequence);synth_effects_panic(&module->effects);
         [module fadeOutAllVoices];
       }
       uint32_t rd = atomic_load_explicit(&module->commandReadIndex, memory_order_acquire);
@@ -1300,9 +1415,15 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 
       while (rd != wr) {
         SynthCommand cmd = module->commandQueue[rd];
-        if (cmd.type == CMD_NOTE_ON) {
+        if (cmd.type == CMD_NOTE_ON || cmd.type == SYNTH_CMD_HELD_ON) {
           [module startVoiceFromCommand:&cmd];
+        } else if(cmd.type == SYNTH_CMD_HELD_OFF || cmd.type == SYNTH_CMD_HELD_UPDATE) {
+          [module applyHeldCommand:&cmd];
+        } else if(cmd.type==7) {
+          synth_effects_set_config(&module->effects,&cmd.processing);
         } else if (cmd.type == CMD_STOP_ALL) {
+          synth_sequence_request_stop(module->sequence);
+          synth_effects_panic(&module->effects);
           [module fadeOutAllVoices];
         } else if (cmd.type == CMD_SHUTDOWN) {
           [module clearVoices];
@@ -1310,6 +1431,8 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
         rd = (rd + 1) % COMMAND_QUEUE_CAPACITY;
       }
       atomic_store_explicit(&module->commandReadIndex, rd, memory_order_release);
+      synth_sequence_begin_block(module->sequence);
+      [module updateSequenceVoices];
 
       if (outputData->mNumberBuffers == 0) return noErr;
 
@@ -1337,18 +1460,32 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
           }
         }
 
+        if(module->sequence->playing)[module renderSequenceFrame];
         double mixL = 0.0;
         double mixR = 0.0;
 
         if (module->stats.active > 0) for (int i = 0; i < module->engineMaxVoices; i++) {
           SynthVoice *v = &module->voices[i];
           if (!v->isActive) continue;
+          if(v->sequenceGeneration && !v->held.releasing && (v->sequenceGeneration!=module->sequence->generation||module->sequence->beat+1e-10>=v->sequenceOffBeat))synth_held_release(&v->held,v->currentEnvelope);
           if (v->spatial && v->samplesPlayed >= v->totalSamples) {
             float l, r;
             synth_spatial_process(&v->spatialState, 0, &l, &r);
             mixL += l; mixR += r;
             if (--v->spatialDrain <= 0) { v->isActive = false; synth_stats_voice_end(&module->stats,true); }
             continue;
+          }
+
+          if(v->held.voiceId) {
+            synth_live_tick(&v->live); const double *live=v->live.value;
+            v->phaseIncrement=live[LIVE_FREQUENCY]/module->engineSampleRate;
+            v->volume=live[LIVE_VOLUME]*v->eventGain;
+            v->lfoPhaseIncrement=live[LIVE_LFO_FREQ]/module->engineSampleRate; v->lfoDepth=live[LIVE_LFO_DEPTH];
+            v->pulseWidth=live[LIVE_PULSE_WIDTH]; v->fmRatio=live[LIVE_FM_RATIO]; v->fmDepth=live[LIVE_FM_DEPTH];
+            if(v->svf.type && (v->live.remaining[LIVE_FILTER_HZ]>0 || v->live.remaining[LIVE_FILTER_Q]>0 || v->svfHz!=live[LIVE_FILTER_HZ] || v->svfQ!=live[LIVE_FILTER_Q])) {
+              v->svfHz=live[LIVE_FILTER_HZ]; v->svfQ=live[LIVE_FILTER_Q];
+              if(!v->modulating)synth_filter_set(&v->svf,v->svfHz,v->svfQ,module->engineSampleRate);
+            }
           }
 
           // --- Sequencer step advance ---
@@ -1370,6 +1507,11 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
             if (v->lfoPhase >= 1.0) v->lfoPhase -= 1.0;
           }
 
+          BOOL processingModulation=v->modulating;
+          SynthModulationOutput mod={0,0,0};
+          if(v->modulating){mod=synth_modulation_tick(&v->modulation,module->sequence->bpm);v->modulating=synth_modulation_is_active(&v->modulation);}
+          double modPulse=v->modulating?synth_modulation_pwm(v->pulseWidth,mod.pwmOffset):v->pulseWidth;
+          double modFM=v->modulating?synth_modulation_fm(v->fmDepth,mod.fmOffset):v->fmDepth;
           // --- Waveform generation ---
           effectivePhaseIncr = ClampDouble(effectivePhaseIncr, -0.45, 0.45);
           double wf = 0.0;
@@ -1383,10 +1525,10 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
           } else if (v->waveType == 5) {
             wf = RenderWavetable(v->phase, v->wavetable, v->wavetableSize);
           } else if (v->fmActive) {
-            wf = synth_fm_sine(v->phase - floor(v->phase), v->fmModPhase, v->fmDepth);
+            wf = synth_fm_sine(v->phase - floor(v->phase), v->fmModPhase, modFM);
           } else {
             wf = RenderPeriodicWave(v->waveType, v->phase, effectivePhaseIncr,
-                                    v->pulseWidth);
+                                    modPulse);
           }
           wf = QuantizeWave(wf, v->bitDepth);
           if (v->filterAlpha > 0.0) {
@@ -1394,7 +1536,8 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
             wf = v->filterState;
           }
           if (v->svf.type != SYNTH_FILTER_NONE) {
-            if (synth_filter_update_due(v->svfSweeping, v->samplesPlayed)) {
+            if(processingModulation && ((v->modulationFrames++&15)==0||!v->modulating))synth_filter_set(&v->svf,synth_modulation_cutoff(v->svfHz,mod.cutoffOctaves,module->engineSampleRate),v->svfQ,module->engineSampleRate);
+            if (!v->modulating && synth_filter_update_due(v->svfSweeping, v->samplesPlayed)) {
               double cutoffHz = v->svfSweeping
                   ? synth_geometric_at(v->svfHz, v->svfHzEnd,
                                        synth_sweep_progress(v->samplesPlayed, v->totalSamples))
@@ -1405,7 +1548,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
           }
 
           // --- Envelope (smoothstep attack, decay to sustain, release) ---
-          double envelope = synth_envelope(v->samplesPlayed, v->totalSamples,
+          double envelope = v->held.voiceId ? synth_held_envelope(&v->held,v->samplesPlayed,v->attackSamples,v->decaySamples,v->sustain,v->releaseSamples) : synth_envelope(v->samplesPlayed, v->totalSamples,
                                            v->attackSamples, v->decaySamples,
                                            v->sustain, v->releaseSamples);
           v->currentEnvelope = envelope;
@@ -1444,8 +1587,13 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
           }
 
           // --- Advance sample counter ---
-          v->samplesPlayed++;
-          if (v->samplesPlayed >= v->totalSamples) {
+          BOOL finished;
+          if(v->held.voiceId) {
+            if(v->samplesPlayed < v->attackSamples+v->decaySamples)v->samplesPlayed++;
+            finished=v->held.releasing && ++v->held.releasePlayed>=MAX(1,v->releaseSamples);
+            if(finished){v->samplesPlayed=v->totalSamples;synth_identity_set(&module->identities[i],0,0);}
+          } else finished=++v->samplesPlayed>=v->totalSamples;
+          if (finished) {
             if (v->spatial) v->currentEnvelope = 0;
             else { v->isActive = false; synth_stats_voice_end(&module->stats,false); }
           }
@@ -1510,8 +1658,10 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
         int laIdx = module->lookaheadIdx;
         double delayedL = module->lookaheadL[laIdx];
         double delayedR = module->lookaheadR[laIdx];
-        double scaledL = mixL * module->smoothedMasterGain;
-        double scaledR = mixR * module->smoothedMasterGain;
+        synth_effects_process(&module->effects,module->sequence->bpm,&mixL,&mixR);
+        double scaledL=mixL,scaledR=mixR;
+        synth_effects_finish(&module->effects,module->smoothedMasterGain,&scaledL,&scaledR);
+        synth_sequence_advance_sample(module->sequence);
         module->lookaheadL[laIdx] = scaledL;
         module->lookaheadR[laIdx] = scaledR;
         module->lookaheadIdx = (laIdx + 1) % module->lookaheadSize;
@@ -1526,6 +1676,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
           module->lookaheadPeakCount--;
         }
 
+        if(measure) synth_stats_pre_limiter(&module->stats,scaledL,scaledR);
         double currentPeak = fmax(fabs(scaledL), fabs(scaledR));
         while (module->lookaheadPeakCount > 0) {
           int last = (module->lookaheadPeakHead
@@ -1609,6 +1760,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
         }
       }
 
+      synth_sequence_publish_state(module->sequence);
       double seconds = measure ? (mach_absolute_time()-statsBegin) * (double)module->statsTimebase.numer / module->statsTimebase.denom * 1e-9 : 0;
       synth_stats_end(&module->stats,(int)frameCount,(int)module->engineSampleRate,seconds);
       return noErr;
@@ -1657,7 +1809,145 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   }
 }
 
-- (NSNumber *)playTone:(id)args
+- (NSNumber *)playSequence:(id)args {return [self publishSequence:args restart:YES];}
+- (NSNumber *)updateSequence:(id)args {return [self publishSequence:args restart:NO];}
+- (NSNumber *)publishSequence:(id)args restart:(BOOL)restart
+{
+ @synchronized(self) {
+  if(!audioEngine||!sequence)return @NO;
+  id raw=[args isKindOfClass:[NSArray class]]&&[args count]==1?args[0]:args;
+  if(![raw isKindOfClass:[NSDictionary class]])return @NO;
+  NSMutableDictionary *merged=restart?[NSMutableDictionary dictionary]:[(sequenceOptions?:@{@"steps":@[@{@"rest":@YES}]}) mutableCopy];
+  [merged addEntriesFromDictionary:raw];
+  if(!restart&&raw[@"voice"]&&[raw[@"voice"] isKindOfClass:[NSDictionary class]]) {
+   merged[@"voice"]=[TiSynthengineContract mergeSequenceVoice:sequenceOptions[@"voice"]?:@{} changes:raw[@"voice"]];
+  }
+  SynthSequenceConfig *bank=synth_sequence_begin_write(sequence);
+  if(!bank){__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);return @NO;}
+  NSDictionary *failure=[TiSynthengineContract prepareSequence:merged config:bank maxFrequency:[self maxFrequencyHz]];
+  if(failure){synth_sequence_cancel_write(sequence,bank);[self acceptValidation:failure method:restart?@"playSequence":@"updateSequence"];return @NO;}
+  if(!synth_sequence_commit(sequence,bank,restart)){__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);return @NO;}
+  sequenceOptions=merged;
+  if(restart){atomic_fetch_add_explicit(&patternGeneration,1,memory_order_relaxed);if(atomic_exchange_explicit(&pendingPatternGeneration,0,memory_order_acq_rel))[self firePatternEnd:NO];}
+  return @YES;
+ }
+}
+- (NSNumber *)stopSequence:(id)args
+{
+ @synchronized(self) {(void)args;if(!sequence||!audioEngine)return @NO;synth_sequence_request_stop(sequence);return @YES;}
+}
+- (NSDictionary *)getSequenceState:(id)args
+{
+ @synchronized(self) {(void)args;
+  SynthSequenceState state={0};state.stepIndex=-1;state.bpm=120;if(sequence)state=synth_sequence_state(sequence);
+  return [TiSynthengineContract sequenceStateObject:&state];
+ }
+}
+- (NSNumber *)setMasterProcessing:(id)args
+{
+ @synchronized(self) {
+  if(!audioEngine)return @NO;
+  id raw=[args isKindOfClass:[NSArray class]]&&[args count]==1?args[0]:args;
+  SynthEffectsConfig next=processingOptions;
+  NSDictionary *failure=[TiSynthengineContract prepareMasterProcessing:raw config:&next];
+  if(failure){[self acceptValidation:failure method:@"setMasterProcessing"];return @NO;}
+  SynthCommand cmd;memset(&cmd,0,sizeof(cmd));cmd.type=7;cmd.processing=next;
+  if([self enqueueCommand:cmd]){__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);return @NO;}
+  processingOptions=next;return @YES;
+ }
+}
+/* Continuous settings apply at a block boundary; structure still waits for a step. */
+- (void)updateSequenceVoices
+{
+ int bank=sequence->pending>=0?sequence->pending:sequence->active;if(bank<0)return;
+ const SynthSequenceConfig *config=&sequence->banks[bank];if(sequenceAppliedRevision==config->revision)return;
+ sequenceAppliedRevision=config->revision;
+ for(int i=0;i<engineMaxVoices;i++) {
+  SynthVoice *v=&voices[i];if(!v->isActive||!v->sequenceGeneration||v->sequenceStep>=config->stepCount)continue;
+  const SynthSequenceVoice *settings=&config->steps[v->sequenceStep].voice;
+  SynthCommand c=StudioSequenceCommand(settings,engineSampleRate);
+  double values[SYNTH_LIVE_COUNT]={synth_sequence_frequency(config,v->sequenceMidi),c.volume,c.filterHz,c.filterQ,c.lfoFreq,c.lfoDepth,c.pulseWidth,c.fmRatio,c.fmDepth};
+  uint32_t mask=synth_live_allowed(v->waveType,v->svf.type)&synth_live_allowed(c.waveType,c.filterType);
+  synth_live_update(&v->live,mask,values,MAX(1,MsToSamples(10,engineSampleRate)));
+  if(synth_modulation_set_config(&v->modulation,&c.modulation,StudioModCapabilities(v->waveType,v->svf.type)))v->modulating=YES;
+ }
+}
+/* Audio-thread only. Scheduled gates belong to voice slots and never consume
+ * public queue capacity; stealing a slot replaces its gate at the same time. */
+- (void)renderSequenceFrame
+{
+ SynthSequenceEvent event;
+ BOOL emitted=synth_sequence_tick(sequence,&event);
+ // Gates ending at this sample become releasing before slot selection.
+ if(emitted)for(int i=0;i<engineMaxVoices;i++) {
+  SynthVoice *v=&voices[i];
+  if(v->isActive&&v->sequenceGeneration&&!v->held.releasing&&
+    (v->sequenceGeneration!=sequence->generation||sequence->beat+1e-10>=v->sequenceOffBeat))
+   synth_held_release(&v->held,v->currentEnvelope);
+ }
+ if(emitted&&event.noteCount) {
+  const SynthSequenceConfig *config=&sequence->banks[event.bank];
+  const SynthSequenceVoice *settings=&config->steps[event.stepIndex].voice;
+  for(int n=0;n<event.noteCount;n++) {
+   SynthCommand cmd=StudioSequenceCommand(settings,engineSampleRate);
+   if(sequenceVoiceId==INT32_MIN)sequenceVoiceId=0;cmd.voiceId=--sequenceVoiceId;
+   cmd.frequency=synth_sequence_frequency(config,event.notes[n]);cmd.eventVoiceCount=event.noteCount;
+   cmd.sequenceGeneration=event.generation;cmd.sequenceOffBeat=event.gateEndBeat;cmd.sequenceStep=event.stepIndex;cmd.sequenceMidi=event.notes[n];
+   [self startVoiceFromCommand:&cmd];
+  }
+ }
+}
+
+- (NSNumber *)playTone:(id)args { return [self publishTone:args voiceId:0]; }
+
+- (NSNumber *)noteOn:(id)args
+{
+  @synchronized(self) {
+    if(audioEngine==nil){__atomic_fetch_add(&statsRejected[1],1,__ATOMIC_RELAXED);return @NO;}
+    id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
+    if(![raw isKindOfClass:[NSDictionary class]]){__atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED);return @NO;}
+    if(![self acceptValidation:[TiSynthengineContract validateNoteOn:raw maxFrequency:[self maxFrequencyHz]] method:@"noteOn"])return @NO;
+    return [self publishTone:raw voiceId:[raw[@"voiceId"] intValue]];
+  }
+}
+
+- (NSNumber *)noteOff:(id)args
+{
+  @synchronized(self) {
+    if(audioEngine==nil){__atomic_fetch_add(&statsRejected[1],1,__ATOMIC_RELAXED);return @NO;}
+    id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
+    if(![raw isKindOfClass:[NSDictionary class]]){__atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED);return @NO;}
+    if(![self acceptValidation:[TiSynthengineContract validateNoteOff:raw] method:@"noteOff"])return @NO;
+    SynthCommand cmd; memset(&cmd,0,sizeof(cmd));cmd.type=SYNTH_CMD_HELD_OFF;cmd.voiceId=[raw[@"voiceId"] intValue];
+    BOOL full=[self enqueueCommand:cmd];if(full)__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);
+    return full ? @NO : @YES;
+  }
+}
+
+- (NSNumber *)updateVoice:(id)args
+{
+  @synchronized(self) {
+    if(audioEngine==nil){__atomic_fetch_add(&statsRejected[1],1,__ATOMIC_RELAXED);return @NO;}
+    id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
+    if(![raw isKindOfClass:[NSDictionary class]]){__atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED);return @NO;}
+    if(![self acceptValidation:[TiSynthengineContract validateUpdateVoice:raw maxFrequency:[self maxFrequencyHz]] method:@"updateVoice"])return @NO;
+    NSArray *keys=@[@"frequency",@"volume",@"filterHz",@"filterQ",@"lfoFreq",@"lfoDepth",@"pulseWidth",@"fmRatio",@"fmDepth"];
+    SynthCommand cmd;memset(&cmd,0,sizeof(cmd));cmd.type=SYNTH_CMD_HELD_UPDATE;cmd.voiceId=[raw[@"voiceId"] intValue];
+    for(int i=0;i<SYNTH_LIVE_COUNT;i++)if(raw[keys[i]]){cmd.liveMask|=1u<<i;cmd.liveValues[i]=[raw[keys[i]] doubleValue];}
+    if(raw[@"note"]){cmd.liveMask|=1u<<LIVE_FREQUENCY;cmd.liveValues[LIVE_FREQUENCY]=ParseNoteToFrequency(raw[@"note"]);}
+    if(raw[@"modulations"]) {
+      double mods[12];[TiSynthengineContract prepareModulations:raw[@"modulations"] values:mods waveType:-1 filterType:-1];
+      cmd.modulation=StudioModulationFromValues(mods);cmd.hasModulations=YES;
+    }
+    int allowed=[self voiceMaskForId:cmd.voiceId];
+    if(allowed>=0 && cmd.hasModulations && !synth_modulation_validate(&cmd.modulation,StudioModCapabilitiesFromMask(allowed)))return @NO;
+    if(allowed>=0 && (cmd.liveMask & ~(uint32_t)allowed)){[self acceptValidation:@{@"key":@"changes",@"reason":@"incompatible_voice_source",@"value":raw} method:@"updateVoice"];return @NO;}
+    BOOL full=[self enqueueCommand:cmd];if(full)__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);
+    return full ? @NO : @YES;
+  }
+}
+
+- (NSNumber *)publishTone:(id)args voiceId:(int32_t)voiceId
 {
   @synchronized(self) {
   if (audioEngine == nil || engineMaxVoices < 1) { __atomic_fetch_add(&statsRejected[1],1,__ATOMIC_RELAXED); return @NO; }
@@ -1667,14 +1957,19 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   if(![raw isKindOfClass:[NSDictionary class]]) { __atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED); return @NO; }
   NSDictionary *options=raw;
   double maxFreq = [self maxFrequencyHz];
-  if (![self acceptValidation:[TiSynthengineContract validateTone:options maxFrequency:maxFreq]
+  if (voiceId==0 && ![self acceptValidation:[TiSynthengineContract validateTone:options maxFrequency:maxFreq]
                        method:@"playTone"]) return @NO;
 
   double frequency = 0.0;
 
   SynthCommand cmd;
   memset(&cmd, 0, sizeof(cmd));
-  cmd.type = CMD_NOTE_ON;
+  cmd.type = voiceId ? SYNTH_CMD_HELD_ON : CMD_NOTE_ON;
+  cmd.voiceId=voiceId;
+  if(options[@"modulations"]) {
+    double mods[12];[TiSynthengineContract prepareModulations:options[@"modulations"] values:mods waveType:-1 filterType:-1];
+    cmd.modulation=StudioModulationFromValues(mods);cmd.hasModulations=YES;
+  }
 
   if ([self containsRawKey:options key:@"note"]) {
     id noteObj = [options objectForKey:@"note"];
@@ -1695,7 +1990,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
 
   NSInteger durationMs = 0;
   [self readOptionalIntegerFrom:options method:@"playTone" key:@"duration"
-                   defaultValue:DURATION_DEFAULT_MS
+                   defaultValue:(voiceId ? DURATION_MAX_MS : DURATION_DEFAULT_MS)
                             min:DURATION_MIN_MS max:DURATION_MAX_MS out:&durationMs];
 
   NSInteger attackMs = 0, releaseMs = 0;
@@ -1755,8 +2050,8 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   }
 
   cmd.durationSamples = MAX(1, MsToSamples((int)durationMs, engineSampleRate));
-  cmd.attackSamples   = MAX(1, MsToSamples((int)attackMs,   engineSampleRate));
-  cmd.releaseSamples  = MAX(1, MsToSamples((int)releaseMs,  engineSampleRate));
+  cmd.attackSamples   = MAX(voiceId ? 0 : 1, MsToSamples((int)attackMs,   engineSampleRate));
+  cmd.releaseSamples  = MAX(voiceId ? 0 : 1, MsToSamples((int)releaseMs,  engineSampleRate));
   cmd.volume          = volume;
   cmd.waveType        = (int)waveType;
   cmd.pan             = pan;
@@ -1790,7 +2085,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
                    value:@"command_queue_full" action:@"drop_newest"];
   }
   if(dropped) __atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);
-  return @(!dropped);
+  return voiceId ? (dropped ? @NO : @YES) : @(!dropped);
   }
 }
 
@@ -1943,6 +2238,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   if (![self acceptValidation:[TiSynthengineContract validatePattern:options
                                                            maxFrequency:[self maxFrequencyHz]]
                        method:@"playPattern"]) return @NO;
+  synth_sequence_request_stop(sequence);
   id stepsObj = [options objectForKey:@"steps"];
   if (![stepsObj isKindOfClass:[NSArray class]]) return @NO;
   NSArray *steps = (NSArray *)stepsObj;
@@ -2247,6 +2543,7 @@ static double DetunedFrequency(double frequency, double cents, double maxFrequen
   }
 
   [audioEngine stop];
+  synth_effects_destroy(&effects);if(sequence){free(sequence);sequence=NULL;}sequenceOptions=nil;
   synth_stats_stopped(&stats);
   sourceNode  = nil;
   audioEngine = nil;

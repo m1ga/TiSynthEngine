@@ -19,6 +19,12 @@ int main() {
   assert(std::abs(a[ST_LOAD]-1.5)<1e-12);
   assert(std::abs(a[ST_PEAK_L]+6.020599913)<1e-8 && a[ST_RMS_L]==a[ST_PEAK_L]);
   assert(std::abs(a[ST_REDUCTION]-6.020599913)<1e-8);
+  synth_stats_pre_limiter(&s, 2.0, -1.0);
+  synth_stats_end(&s,1,48000,0); synth_stats_read(&s,a);
+  assert(std::abs(a[ST_PRE_LIMITER_PEAK]-6.020599913)<1e-8);
+  for(int i=0;i<9600;i++) synth_stats_sample(&s,0,0,1,48000);
+  synth_stats_end(&s,9600,48000,0); synth_stats_read(&s,a);
+  assert(a[ST_REDUCTION]==0 && std::abs(a[ST_MAX_REDUCTION]-6.020599913)<1e-8);
   synth_stats_reset(&s); synth_stats_begin(&s);
   for(int i=0;i<9599;i++) synth_stats_sample(&s,0,0,1,48000);
   synth_stats_end(&s,9599,48000,0.001); synth_stats_read(&s,a);

@@ -6,6 +6,13 @@ Beta for the planned first public release.
 
 ### Added
 
+- Add sample-clock `playSequence`, `updateSequence`, `stopSequence` and `getSequenceState`, triple-bank publication, step chords and queue-independent musical gates.
+- Add shared stereo chorus, ping-pong delay, Schroeder reverb, explicit creative saturation and fixed input gain through `setMasterProcessing`. Effects default to bypass; tails drain on disable and panic invalidates histories without scanning buffers.
+- Add two optional phase-preserving native LFOs on sustained/sequence voices, with filter, PWM and FM targets and free/tempo-sync rates.
+- Add accumulated `preLimiterPeakDb` and `maxLimiterReductionDb` diagnostics. Studio preset calibration and listening acceptance are reported separately from module capabilities.
+
+- Add matching `noteOn`, `noteOff` and `updateVoice` APIs for native sustained notes, current-level release and 10 ms live parameter ramps. Preserve timed calls and beta 1.0.0; detect methods by capability.
+
 - Complete the interactive example with nine headphone positions, stereo comparison, spatial chords/patterns, audio-session selection and statistics read/reset/diagnostic controls.
 - Handle playback rejection consistently in example actions and respect window safe areas; document setup, device checks, scheduler completion exceptions, statistics cleanup and idle render load.
 
@@ -18,7 +25,7 @@ Beta for the planned first public release.
 - Document per-effect JavaScript integration, app controls, installed-feature detection and stereo fallback; check API table coverage against the native contract.
 
 - Native low-latency tone synthesis for Titanium on Android and iOS.
-- Eleven public methods: `getDefaults`, `startEngine`, `playTone`, `playChord`, `playPattern`, `setVolume`, `stopAll`, `shutdown`, `getStats`, `resetStats` and `setStatsEnabled`.
+- Nineteen public methods, including native transport and processing in addition to: `getDefaults`, `startEngine`, `playTone`, `playChord`, `playPattern`, `noteOn`, `noteOff`, `updateVoice`, `setVolume`, `stopAll`, `shutdown`, `getStats`, `resetStats` and `setStatsEnabled`.
 - Sine, square, sawtooth, triangle, white-noise and custom wavetable sources.
 - Envelopes, stereo pan movement, pitch sweeps, vibrato, chords and timed patterns with tempo, note values and swing.
 - Variable-rate sample-and-hold noise with optional rate sweeps.
@@ -42,3 +49,8 @@ Beta for the planned first public release.
 - `getDefaults()` reports the new defaults and limits and a `filterTypes` list.
 - The envelope, filter, sweep, FM and cents math live once in `shared/synth_core.h`, which both renderers include. Host checks cover that core, the Android engine render path and a replayed contract corpus for the iOS contract.
 - Requires Titanium SDK 13.2.0.GA or newer and iOS 15 or newer.
+
+### Fixed
+
+- Protect sustained attack and release edges shorter than 3 ms from hard gating on Android and iOS. Longer envelopes and existing timed envelopes retain their behavior.
+- Make the Android native limiter reach its target within the lookahead deadline, matching iOS and the Java DSP reference. Dense sums now respect the configured ceiling instead of escaping into hard clipping; drained-window gain resets without changing below-ceiling source gain.

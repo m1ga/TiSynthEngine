@@ -44,12 +44,16 @@ assert(!androidModule.includes('options.get("audioSession")') && !androidNative.
   'Android validates audioSession without changing its output stream')
 
 const publicMethods = [
+  'playSequence', 'updateSequence', 'stopSequence', 'getSequenceState', 'setMasterProcessing',
   'getStats',
   'resetStats',
   'setStatsEnabled',
   'getDefaults',
   'startEngine',
   'playTone',
+  'noteOn',
+  'noteOff',
+  'updateVoice',
   'playChord',
   'playPattern',
   'setVolume',
@@ -65,7 +69,7 @@ const iosPublicMethods = Array.from(iosHeader.matchAll(
 assert.deepStrictEqual(androidPublicMethods.sort(), publicMethods.slice().sort(), 'Android public method surface')
 assert.deepStrictEqual(iosPublicMethods.sort(), publicMethods.slice().sort(), 'iOS public method surface')
 
-;['startEngine', 'setVolume', 'playTone', 'playChord', 'playPattern'].forEach((method) => {
+;['startEngine', 'setVolume', 'playTone', 'playChord', 'playPattern', 'noteOn', 'noteOff', 'updateVoice'].forEach((method) => {
   assert(new RegExp(`public (?:synchronized )?boolean ${method}\\(`).test(androidModule), `Android ${method} returns acceptance`)
   assert(new RegExp(`\\(NSNumber \\*\\)${method}:`).test(iosModule), `iOS ${method} returns acceptance`)
 })
@@ -73,6 +77,9 @@ assert.deepStrictEqual(iosPublicMethods.sort(), publicMethods.slice().sort(), 'i
 const supportedOptions = {
   StartEngine: ['maxVoices', 'mixingProfile', 'audioSession'],
   SetVolume: ['volume'],
+  NoteOn: ['voiceId', 'frequency', 'note', 'attack', 'decay', 'sustain', 'release', 'volume', 'waveType', 'pan', 'lfoFreq', 'lfoDepth', 'noiseRate', 'lowPassHz', 'pulseWidth', 'waveTable', 'bitDepth', 'filterType', 'filterHz', 'filterQ', 'fmRatio', 'fmDepth', 'detune', 'spatialX', 'spatialY', 'modulations'],
+  NoteOff: ['voiceId'],
+  UpdateVoice: ['voiceId', 'frequency', 'note', 'volume', 'filterHz', 'filterQ', 'lfoFreq', 'lfoDepth', 'pulseWidth', 'fmRatio', 'fmDepth', 'modulations'],
   Tone: [
     'frequency', 'note', 'duration', 'attack', 'release', 'volume',
     'waveType', 'pan', 'panEnd', 'frequencyEnd', 'lfoFreq', 'lfoDepth',
@@ -119,7 +126,7 @@ Object.keys(supportedOptions).forEach((suffix) => {
   )
   const iosOptions = quotedValues(
     iosContract,
-    new RegExp(`validate${suffix}:[\\s\\S]*?RejectUnknownOptions\\(options,([\\s\\S]*?)\\);`),
+    new RegExp(`\\+ \\(NSDictionary \\*\\)validate${suffix}:[\\s\\S]*?RejectUnknownOptions\\(options,([\\s\\S]*?)\\);`),
     `iOS validate${suffix}`
   )
   assert.deepStrictEqual(androidOptions, expected, `Android validate${suffix} options`)

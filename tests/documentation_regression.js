@@ -236,7 +236,7 @@ function documentedKeys (section) {
   return [...new Set(keys)].sort()
 }
 function nativeIosKeys (method, target) {
-  const source = nativeIosContract.split('validate' + method + ':')[1]
+  const source = nativeIosContract.split('+ (NSDictionary *)validate' + method + ':')[1]
   assert(source, 'iOS validator exists: ' + method)
   const list = source.match(new RegExp('RejectUnknownOptions\\(' + target + ',\\s*@\\[([\\s\\S]*?)\\]\\)'))
   assert(list, 'iOS allowlist exists: ' + method + '/' + target)
@@ -250,7 +250,8 @@ function nativeKeys (method, target) {
   return [...new Set([...list[1].matchAll(/"(\w+)"/g)].map(match => match[1]))].sort()
 }
 for (const [method, validator] of [['startEngine', 'StartEngine'], ['playTone', 'Tone'],
-  ['playChord', 'Chord'], ['playPattern', 'Pattern'], ['setVolume', 'SetVolume']]) {
+  ['playChord', 'Chord'], ['playPattern', 'Pattern'], ['setVolume', 'SetVolume'],
+  ['noteOn', 'NoteOn'], ['noteOff', 'NoteOff'], ['updateVoice', 'UpdateVoice']]) {
   const section = apiDoc.split('## `' + method + '(options)`')[1].split('\n## ')[0]
   const rootTable = method === 'playPattern' ? section.split('Step keys:')[0] : section
   assert.deepStrictEqual(documentedKeys(rootTable), nativeKeys(validator, 'options'),

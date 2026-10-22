@@ -446,7 +446,7 @@ if (!playPositionedTone(explosion, 900, 100, 1000, 800)) {
 
 Connect a Titanium switch's `change` event to `audioSettings.binaural = event.value`; connect the two sliders' `change` events to `horizontalPercent` and `heightPercent`. Configure slider minimum 0 and maximum 100, and disable the height slider while the switch is off. Validate restored preference values as finite numbers within those ranges before using them. Do not pass these preference names to `playTone`: that would return `false` with `unsupported_option`.
 
-Supply the current position whenever an effect fires. A projectile launch cue can use the launch position; an impact uses the collision position. Repeated short motor events can use successive positions. A single active tone cannot move after submission because this API has no per-voice handle or position-update method. Stereo `panEnd` movement cannot be combined with binaural; do not continually retrigger long sounds every frame to imitate movement.
+Supply the current position whenever an effect fires. A projectile launch cue can use the launch position; an impact uses the collision position. Repeated short motor events can use successive positions. A single active tone cannot move after submission because positions remain fixed, including on an identified sustained voice. Stereo `panEnd` movement cannot be combined with binaural; do not continually retrigger long sounds every frame to imitate movement.
 
 ### Chords and patterns
 

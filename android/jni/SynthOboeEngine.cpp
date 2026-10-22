@@ -13,8 +13,12 @@
 #include <vector>
 
 #include "../../shared/synth_core.h"
+#include "../../shared/synth_held.h"
 #include "../../shared/synth_spatial.h"
 #include "../../shared/synth_stats.h"
+#include "../../shared/synth_sequence.h"
+#include "../../shared/synth_effects.h"
+#include "../../shared/synth_modulation.h"
 
 namespace {
 constexpr int kMaxVoices = 32;
@@ -23,7 +27,7 @@ constexpr int kMaxWavetableSamples = 64;
 constexpr int kQueueCapacity = 128;
 // Mirrors SynthThread.EXTRA_*: decay ms, sustain, filter type, cutoff, cutoff
 // end, Q, FM ratio, FM depth, FM depth end (NaN = no sweep), spatial enabled, x, y.
-constexpr int kExtraCount = 12;
+constexpr int kExtraCount = 25;
 constexpr double kPi = 3.14159265358979323846;
 
 template <typename T> T clampValue(T value, T low, T high) {
@@ -99,6 +103,12 @@ double eventGain(int profile, int waveType, int voiceCount) {
 }
 
 struct Command {
+  SynthModulationConfig modulations=synth_modulation_default_config();
+  bool hasModulations=false;
+  SynthEffectsConfig effects=synth_effects_default_config();
+  int32_t voiceId = 0;
+  uint32_t liveMask = 0;
+  double liveValues[SYNTH_LIVE_COUNT]{};
   bool spatial = false;
   double spatialX = 0.0, spatialY = 0.0;
   int type = 0;
@@ -123,6 +133,16 @@ struct Command {
 };
 
 struct Voice {
+  SynthModulation modulation{};
+  bool modulating=false;
+  uint32_t modulationFrames=0;
+  bool sequenceOwned=false;
+  int sequenceStep=0,sequenceMidi=0;
+  double sequenceOffBeat=0;
+  uint64_t sequenceGeneration=0;
+  SynthHeld held{};
+  SynthLive live{};
+  double eventGain = 1;
   bool spatial = false;
   SynthSpatial spatialState{};
   int spatialDrain = 0;
@@ -175,7 +195,9 @@ public:
   Engine(int maxVoices, int profile)
       : maxVoices_(clampValue(maxVoices, 1, kMaxVoices)),
         profile_(clampValue(profile, 0, 3)), voices_(maxVoices_),
-        tails_(maxVoices_) { synth_stats_init(&stats_); }
+        tails_(maxVoices_) { synth_stats_init(&stats_); synth_sequence_init(&sequence_,48000); }
+
+  ~Engine() {synth_effects_destroy(&effects_);}
 
   int maxVoices() const { return maxVoices_; }
   void readStats(double *out) {
@@ -249,6 +271,19 @@ public:
     return false;
   }
 
+  int voiceMaskForId(int32_t id) {
+    std::lock_guard<std::mutex> guard(producerMutex_);
+    int result=-1;
+    for(const auto &identity:identities_) { int found=synth_identity_mask(&identity,id); if(found>=0)result=found; }
+    uint32_t read=read_.load(std::memory_order_acquire), write=write_.load(std::memory_order_acquire);
+    while(read!=write) {
+      const Command &c=queue_[read];
+      if(c.type==SYNTH_CMD_HELD_ON && c.voiceId==id)result=(int)synth_live_allowed(c.waveType,c.filterType);
+      read=(read+1)%kQueueCapacity;
+    }
+    return result;
+  }
+
   bool enqueueChord(std::vector<Command> commands) {
     std::lock_guard<std::mutex> guard(producerMutex_);
     uint32_t write = write_.load(std::memory_order_relaxed);
@@ -263,6 +298,30 @@ public:
     write_.store(write, std::memory_order_release);
     return false;
   }
+
+  bool publishSequence(const double *packet,int size,bool restart) {
+    if(size<7)return false;
+    int count=(int)packet[0];if(count<1||count>512||size!=7+count*144)return false;
+    std::lock_guard<std::mutex> guard(producerMutex_);
+    auto *c=synth_sequence_begin_write(&sequence_);if(!c)return false;
+    c->stepCount=count;c->bpm=packet[1];c->swing=packet[2];c->loop=(int)packet[3];
+    c->mode=(int)packet[4];c->tuning=packet[5];c->detune=packet[6];
+    for(int i=0;i<count;i++) {
+      const double *p=packet+7+i*144;auto &step=c->steps[i];auto &v=step.voice;
+      step.noteCount=(int)p[0];step.rest=(int)p[1];step.gate=p[2];
+      for(int n=0;n<32;n++)step.notes[n]=(uint8_t)p[3+n];
+      v.volume=p[35];v.pan=p[36];v.frequencyEnd=p[37];v.lfoFreq=p[38];v.lfoDepth=p[39];
+      v.noiseRate=p[40];v.lowPassHz=p[41];v.pulseWidth=p[42];v.filterHz=p[43];v.filterQ=p[44];
+      v.fmRatio=p[45];v.fmDepth=p[46];v.spatialX=p[47];v.spatialY=p[48];v.sustain=p[49];
+      v.waveType=(int)p[50];v.attack=(int)p[51];v.decay=(int)p[52];v.release=(int)p[53];
+      v.filterType=(int)p[54];v.bitDepth=(int)p[55];v.spatial=(int)p[56];v.wavetableSize=(int)p[57];
+      for(int j=0;j<64;j++)v.wavetable[j]=p[58+j];
+      for(int j=0;j<12;j++)v.mods[j]=p[122+j];
+    }
+    return synth_sequence_commit(&sequence_,c,restart)!=0;
+  }
+  void stopSequence() { synth_sequence_request_stop(&sequence_); }
+  SynthSequenceState sequenceState() {return synth_sequence_state(&sequence_);}
 
   bool stopAll() {
     Command command;
@@ -284,19 +343,25 @@ public:
     const bool measure = synth_stats_begin(&stats_);
     const auto begin = measure ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     processCommands();
+    synth_sequence_begin_block(&sequence_);
+    updateSequenceVoices();
     auto *output = static_cast<float *>(audioData);
     for (int32_t frame = 0; frame < frames; ++frame) {
+      if(sequence_.playing)processSequence();
       double left = 0.0, right = 0.0;
       if (stats_.active > 0) for (Voice &voice : voices_)
         renderVoice(voice, left, right);
       if (stats_.tails > 0) for (Tail &tail : tails_)
         renderTail(tail, left, right);
-      limit(left, right);
+      if(effectsActive_)synth_effects_process(&effects_,sequence_.bpm,&left,&right);
+      limit(left, right, measure);
+      synth_sequence_advance_sample(&sequence_);
       output[frame * 2] = static_cast<float>(clampValue(outputL_, -1.0, 1.0));
       output[frame * 2 + 1] =
           static_cast<float>(clampValue(outputR_, -1.0, 1.0));
       if (measure) synth_stats_sample(&stats_, output[frame*2], output[frame*2+1], limiterGain_, renderSampleRate_);
     }
+    synth_sequence_publish_state(&sequence_);
     synth_stats_end(&stats_, frames, renderSampleRate_, measure ? std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count() : 0);
     return oboe::DataCallbackResult::Continue;
   }
@@ -355,7 +420,8 @@ private:
     const int burst = newStream->getFramesPerBurst();
     if (burst > 0)
       newStream->setBufferSizeInFrames(burst * 2);
-    initializeLimiter();
+    sequence_.sampleRate=renderSampleRate_;
+    if(!initializeLimiter())return false;
     xrunLast_=0;
     stream_ = std::move(newStream);
     return true;
@@ -391,8 +457,10 @@ private:
   }
 
   void clearRenderState() {
-    for (Voice &voice : voices_)
+    for (Voice &voice : voices_) {
+      synth_identity_set(&identities_[&voice-voices_.data()],0,0);
       voice = Voice{};
+    }
     for (Tail &tail : tails_)
       tail = Tail{};
     synth_stats_stopped(&stats_);
@@ -402,7 +470,7 @@ private:
     return std::max(1, static_cast<int>(ms * renderSampleRate_ / 1000.0));
   }
 
-  void initializeLimiter() {
+  bool initializeLimiter() {
     lookahead_ = std::max(1, static_cast<int>(renderSampleRate_ * 0.010));
     delayL_.assign(lookahead_, 0.0);
     delayR_.assign(lookahead_, 0.0);
@@ -411,8 +479,15 @@ private:
     delayIndex_ = peakHead_ = peakCount_ = 0;
     sampleIndex_ = 0;
     limiterGain_ = smoothedMaster_ = 1.0;
+    limiterAttackTarget_ = 1.0;
+    limiterAttackStep_ = 0.0;
     outputL_ = outputR_ = 0.0;
+    auto retainedEffects=effects_.memoryBytes?effects_.config:synth_effects_default_config();
+    synth_effects_destroy(&effects_);
+    if(!synth_effects_init(&effects_,renderSampleRate_))return false;
+    synth_effects_set_config(&effects_,&retainedEffects);
     releaseCoeff_ = 1.0 - std::exp(-1.0 / (0.100 * renderSampleRate_));
+    return true;
   }
 
   void processCommands() {
@@ -420,14 +495,31 @@ private:
     const uint32_t write = write_.load(std::memory_order_acquire);
     while (read != write) {
       const Command command = queue_[read];
-      if (command.type == 1)
+      if (command.type == 1 || command.type == SYNTH_CMD_HELD_ON)
         startVoice(command);
+      else if(command.type == SYNTH_CMD_HELD_OFF || command.type == SYNTH_CMD_HELD_UPDATE) {
+        for(Voice &v: voices_) if(v.active && v.held.voiceId==command.voiceId) {
+          if(command.type == SYNTH_CMD_HELD_OFF) synth_held_release(&v.held,v.envelope);
+          else if(!(command.liveMask & ~synth_live_allowed(v.waveType,v.filter.type)))
+            {synth_live_update(&v.live,command.liveMask,command.liveValues,toSamples(10));
+             if(command.hasModulations&&synth_modulation_set_config(&v.modulation,&command.modulations,modulationCapabilities(v)))v.modulating=true;}
+          break;
+        }
+      }
+      else if(command.type==8) {synth_effects_set_config(&effects_,&command.effects);effectsActive_=true;}
+      else if(command.type==7) {
+        for(auto &v:voices_)if(v.active&&v.held.voiceId==command.voiceId)
+          if(synth_modulation_set_config(&v.modulation,&command.modulations,modulationCapabilities(v)))v.modulating=true;
+      }
       else if (command.type == 2) {
+        synth_effects_panic(&effects_);
+        synth_sequence_request_stop(&sequence_);
         for (Voice &voice : voices_) {
           if (voice.active)
             snapshotTail(voice, 20);
           if (voice.active) synth_stats_voice_end(&stats_, voice.spatial);
           voice.active = false;
+          synth_identity_set(&identities_[&voice-voices_.data()],0,0);
         }
       }
       read = (read + 1) % kQueueCapacity;
@@ -435,36 +527,50 @@ private:
     read_.store(read, std::memory_order_release);
   }
 
-  void startVoice(const Command &command) {
+  Voice *startVoice(const Command &command) {
     Voice *voice = nullptr;
-    int leastRemaining = INT32_MAX;
-    for (Voice &candidate : voices_) {
-      if (!candidate.active) {
-        voice = &candidate;
-        break;
-      }
-      const int remaining = candidate.duration - candidate.played;
-      if (remaining < leastRemaining) {
-        leastRemaining = remaining;
-        voice = &candidate;
+    bool heldPool=command.type==SYNTH_CMD_HELD_ON;
+    for(Voice &v:voices_) if(v.active && v.held.voiceId) heldPool=true;
+    // Reusing an active ID always replaces that attack, preserving a fade tail.
+    if(command.voiceId)for(Voice &v:voices_)if(v.active && v.held.voiceId==command.voiceId){voice=&v;break;}
+    if(!voice) {
+      int leastRemaining=INT32_MAX; bool chosenRelease=false;
+      for(Voice &candidate:voices_) {
+        if(!candidate.active){voice=&candidate;break;}
+        int remaining=candidate.duration-candidate.played;
+        bool releasing=candidate.held.voiceId ? candidate.held.releasing!=0 : remaining<=candidate.release;
+        if(!voice || (heldPool ? (releasing!=chosenRelease ? releasing : candidate.held.order<voice->held.order) : remaining<leastRemaining)) {
+          voice=&candidate; leastRemaining=remaining; chosenRelease=releasing;
+        }
       }
     }
     if (!voice)
-      return;
+      return nullptr;
+    const bool replacing=voice->active;
     synth_stats_voice_start(&stats_, voice->active, voice->spatial, command.spatial);
     if (voice->active)
       snapshotTail(*voice, 6);
     *voice = Voice{};
     voice->active = true;
+    synth_modulation_init(&voice->modulation,renderSampleRate_);
+    voice->held.voiceId=command.voiceId;
+    voice->held.order=++voiceOrder_;
+    synth_identity_set(&identities_[voice-voices_.data()],command.voiceId,synth_live_allowed(command.waveType,command.filterType));
     voice->spatial = command.spatial;
     if (voice->spatial) {
       synth_spatial_init(&voice->spatialState, command.spatialX, command.spatialY, renderSampleRate_);
       voice->spatialDrain = voice->spatialState.taps - 1;
     }
-    voice->duration = std::max(1, command.duration);
+    voice->duration = command.voiceId ? INT32_MAX : std::max(1, command.duration);
     voice->attack = clampValue(command.attack, 0, voice->duration - 1);
+    if(command.voiceId && replacing)voice->attack=std::max(voice->attack,toSamples(6));
     voice->release =
         clampValue(command.release, 0, voice->duration - voice->attack);
+      if(command.voiceId) {
+        int edge=synth_held_edge_samples(renderSampleRate_);
+        voice->attack=std::max(voice->attack,edge);
+        voice->release=std::max(voice->release,edge);
+      }
     voice->waveType = clampValue(command.waveType, 0, 5);
     voice->volume =
         clampValue(command.volume, 0.0, 2.0) *
@@ -541,9 +647,64 @@ private:
     voice->stepSamples = toSamples(command.stepDurationMs);
     if (voice->stepCount > 0)
       voice->increment = voice->steps[0] / renderSampleRate_;
+    if(command.voiceId) {
+      voice->eventGain=eventGain(profile_,voice->waveType,command.eventVoiceCount);
+      double values[SYNTH_LIVE_COUNT]={command.frequency,command.volume,command.filterHz,command.filterQ,command.lfoFreq,command.lfoDepth,command.pulseWidth,command.fmRatio,command.fmDepth};
+      synth_live_init(&voice->live,values);
+      voice->fmActive=voice->waveType==0;
+    }
     voice->noise = reinterpret_cast<uintptr_t>(voice) ^ sampleIndex_;
     voice->noise = voice->noise * 6364136223846793005ULL + 1442695040888963407ULL;
     voice->heldNoise = static_cast<int32_t>(voice->noise >> 32) / 2147483648.0;
+    synth_modulation_set_config(&voice->modulation,&command.modulations,modulationCapabilities(*voice));
+    voice->modulating=synth_modulation_is_active(&voice->modulation)!=0;
+    return voice;
+  }
+
+  static unsigned modulationCapabilities(const Voice &v) {
+    return (v.filter.type?SYNTH_MOD_CAP_FILTER:0u)|(v.waveType==1?SYNTH_MOD_CAP_PWM:0u)|(v.waveType==0?SYNTH_MOD_CAP_FM:0u);
+  }
+  static SynthModulationConfig unpackModulations(const double *p) {
+    auto config=synth_modulation_default_config();
+    for(int i=0;i<2;i++,p+=6){auto &l=config.lfo[i];l.enabled=(int)p[0];l.waveform=(int)p[1];l.target=(int)p[2];l.rateHz=p[3];l.depth=p[4];l.syncBeats=p[5];}
+    return config;
+  }
+  void updateSequenceVoices() {
+    int bank=sequence_.pending>=0?sequence_.pending:sequence_.active;if(bank<0)return;
+    auto &config=sequence_.banks[bank];
+    if(config.revision==appliedSequenceContinuous_)return;
+    appliedSequenceContinuous_=config.revision;
+    for(auto &v:voices_)if(v.active&&v.sequenceOwned&&v.sequenceStep<config.stepCount) {
+      auto &shape=config.steps[v.sequenceStep].voice;
+      double values[SYNTH_LIVE_COUNT]={synth_sequence_frequency(&config,v.sequenceMidi),shape.volume,shape.filterHz,shape.filterQ,shape.lfoFreq,shape.lfoDepth,shape.pulseWidth,shape.fmRatio,shape.fmDepth};
+      synth_live_update(&v.live,synth_live_allowed(v.waveType,v.filter.type)&synth_live_allowed(shape.waveType,shape.filterType),values,toSamples(10));
+      auto mods=unpackModulations(shape.mods);if(synth_modulation_set_config(&v.modulation,&mods,modulationCapabilities(v)))v.modulating=true;
+    }
+  }
+
+  void processSequence() {
+    SynthSequenceEvent event;
+    bool fired=synth_sequence_tick(&sequence_,&event)!=0;
+    if(!fired)return;
+    // Expired gates precede attacks at the same sample, including voice stealing.
+    for(auto &v:voices_)if(v.active&&v.sequenceOwned&&!v.held.releasing&&
+       (v.sequenceGeneration!=sequence_.generation||sequence_.beat+1e-10>=v.sequenceOffBeat))
+      synth_held_release(&v.held,v.envelope);
+    const auto &config=sequence_.banks[event.bank];const auto &shape=config.steps[event.stepIndex].voice;
+    for(int n=0;n<event.noteCount;n++) {
+      Command c;c.type=SYNTH_CMD_HELD_ON;c.voiceId=nextSequenceId_;
+      nextSequenceId_=nextSequenceId_==INT32_MIN?-1:nextSequenceId_-1;
+      c.frequency=synth_sequence_frequency(&config,event.notes[n]);c.eventVoiceCount=event.noteCount;
+      c.attack=toSamples(shape.attack);c.decay=shape.decay?toSamples(shape.decay):0;c.release=toSamples(shape.release);
+      c.volume=shape.volume;c.pan=c.panEnd=shape.pan;c.waveType=shape.waveType;c.sustain=shape.sustain;
+      c.lfoFreq=shape.lfoFreq;c.lfoDepth=shape.lfoDepth;c.noiseRate=shape.noiseRate;c.lowPassHz=shape.lowPassHz;
+      c.pulseWidth=shape.pulseWidth;c.filterType=shape.filterType;c.filterHz=shape.filterHz;c.filterQ=shape.filterQ;
+      c.fmRatio=shape.fmRatio;c.fmDepth=shape.fmDepth;c.bitDepth=shape.bitDepth;
+      c.spatial=shape.spatial;c.spatialX=shape.spatialX;c.spatialY=shape.spatialY;
+      c.modulations=unpackModulations(shape.mods);
+      c.wavetableSize=shape.wavetableSize;std::copy(shape.wavetable,shape.wavetable+64,c.wavetable.begin());
+      Voice *v=startVoice(c);if(v){v->sequenceOwned=true;v->sequenceStep=event.stepIndex;v->sequenceMidi=event.notes[n];v->sequenceOffBeat=event.gateEndBeat;v->sequenceGeneration=event.generation;}
+    }
   }
 
   void updatePan(Voice &voice) {
@@ -652,6 +813,9 @@ private:
   void renderVoice(Voice &voice, double &left, double &right) {
     if (!voice.active)
       return;
+    if(voice.sequenceOwned&&!voice.held.releasing&&
+       (voice.sequenceGeneration!=sequence_.generation||sequence_.beat+1e-10>=voice.sequenceOffBeat))
+      synth_held_release(&voice.held,voice.envelope);
     if (voice.spatial && voice.played >= voice.duration) {
       float l, r;
       synth_spatial_process(&voice.spatialState, 0, &l, &r);
@@ -659,11 +823,33 @@ private:
       if (--voice.spatialDrain <= 0) { voice.active = false; synth_stats_voice_end(&stats_, true); }
       return;
     }
+    if(voice.held.voiceId) {
+      synth_live_tick(&voice.live);
+      const double *v=voice.live.value;
+      voice.increment=v[LIVE_FREQUENCY]/renderSampleRate_;
+      voice.volume=v[LIVE_VOLUME]*voice.eventGain;
+      voice.lfoIncrement=v[LIVE_LFO_FREQ]/renderSampleRate_; voice.lfoDepth=v[LIVE_LFO_DEPTH];
+      voice.pulseWidth=v[LIVE_PULSE_WIDTH]; voice.fmRatio=v[LIVE_FM_RATIO]; voice.fmDepth=v[LIVE_FM_DEPTH];
+      if(voice.filter.type && (voice.live.remaining[LIVE_FILTER_HZ]>0 || voice.live.remaining[LIVE_FILTER_Q]>0 || voice.filterHz!=v[LIVE_FILTER_HZ] || voice.filterQ!=v[LIVE_FILTER_Q])) {
+        voice.filterHz=v[LIVE_FILTER_HZ]; voice.filterQ=v[LIVE_FILTER_Q];
+        synth_filter_set(&voice.filter,voice.filterHz,voice.filterQ,renderSampleRate_);
+      }
+    }
     if (voice.stepCount > 0 && ++voice.samplesInStep >= voice.stepSamples) {
       voice.samplesInStep = 0;
       voice.step = (voice.step + 1) % voice.stepCount;
       voice.increment = voice.steps[voice.step] / renderSampleRate_;
     }
+    double effectivePWM=voice.pulseWidth,effectiveFM=voice.fmDepth;
+    SynthModulationOutput mod={0,0,0};
+    bool modulating=voice.modulating;
+    if(modulating) {mod=synth_modulation_tick(&voice.modulation,sequence_.bpm);voice.modulating=synth_modulation_is_active(&voice.modulation)!=0;}
+    if(modulating) {
+      effectivePWM=synth_modulation_pwm(effectivePWM,mod.pwmOffset);
+      effectiveFM=synth_modulation_fm(effectiveFM,mod.fmOffset);
+    }
+    if(voice.filter.type && modulating && ((voice.modulationFrames++&15u)==0||!voice.modulating))
+      synth_filter_set(&voice.filter,synth_modulation_cutoff(voice.filterHz,mod.cutoffOctaves,renderSampleRate_),voice.filterQ,renderSampleRate_);
     double increment = voice.increment;
     if (voice.lfoDepth > 0.0) {
       increment +=
@@ -687,9 +873,9 @@ private:
     } else if (voice.waveType == 5) {
       wave = wavetableWave(voice.phase, voice.wavetable, voice.wavetableSize);
     } else if (voice.fmActive) {
-      wave = synth_fm_sine(voice.phase, voice.modPhase, voice.fmDepth);
+      wave = synth_fm_sine(voice.phase, voice.modPhase, effectiveFM);
     } else {
-      wave = periodicWave(voice.waveType, voice.phase, increment, voice.pulseWidth);
+      wave = periodicWave(voice.waveType, voice.phase, increment, effectivePWM);
     }
     wave = quantizeWave(wave, voice.bitDepth);
     if (voice.filterAlpha > 0.0) {
@@ -706,6 +892,7 @@ private:
       wave = synth_filter_process(&voice.filter, wave);
     }
     const double envelope =
+        voice.held.voiceId ? synth_held_envelope(&voice.held,voice.played,voice.attack,voice.decay,voice.sustain,voice.release) :
         synth_envelope(voice.played, voice.duration, voice.attack, voice.decay,
                        voice.sustain, voice.release);
     voice.envelope = envelope;
@@ -732,17 +919,24 @@ private:
       voice.pan = clampValue(voice.pan + voice.panDelta, -1.0, 1.0);
       updatePan(voice);
     }
-    if (++voice.played >= voice.duration) {
+    bool finished;
+    if(voice.held.voiceId) {
+      if(voice.played < voice.attack+voice.decay) ++voice.played;
+      finished=voice.held.releasing && ++voice.held.releasePlayed>=std::max(1,voice.release);
+      if(finished) {voice.played=voice.duration; synth_identity_set(&identities_[&voice-voices_.data()],0,0);}
+    } else finished=++voice.played>=voice.duration;
+    if (finished) {
       if (voice.spatial) voice.envelope = 0;
       else { voice.active = false; synth_stats_voice_end(&stats_, false); }
     }
   }
 
-  void limit(double left, double right) {
+  void limit(double left, double right, bool measure) {
     const double targetMaster = master_.load(std::memory_order_relaxed);
     smoothedMaster_ += (targetMaster - smoothedMaster_) / lookahead_;
-    left *= smoothedMaster_;
-    right *= smoothedMaster_;
+    if(effectsActive_)synth_effects_finish(&effects_,smoothedMaster_,&left,&right);
+    else {left*=smoothedMaster_;right*=smoothedMaster_;}
+    if(measure)synth_stats_pre_limiter(&stats_,left,right);
     const int index = delayIndex_;
     const double delayedL = delayL_[index], delayedR = delayR_[index];
     delayL_[index] = left;
@@ -769,17 +963,39 @@ private:
     const double windowPeak = peakValues_[peakHead_];
     const double ceiling = profile_ == 3 ? 0.70 : 0.85;
     const double targetGain = windowPeak > ceiling ? ceiling / windowPeak : 1.0;
-    if (targetGain < limiterGain_)
-      limiterGain_ += (targetGain - limiterGain_) / lookahead_;
-    else
+    // Reach the required gain before the peak leaves the lookahead window.
+    // An exponential attack still misses the ceiling at that deadline.
+    if (targetGain < limiterGain_) {
+      limiterAttackTarget_ = std::min(limiterAttackTarget_, targetGain);
+      const double requiredStep = (limiterAttackTarget_ - limiterGain_) / lookahead_;
+      limiterAttackStep_ = std::min(limiterAttackStep_, requiredStep);
+    }
+    if (limiterAttackStep_ < 0.0 && limiterGain_ > limiterAttackTarget_) {
+      limiterGain_ = std::max(limiterAttackTarget_, limiterGain_ + limiterAttackStep_);
+    } else {
+      limiterAttackTarget_ = 1.0;
+      limiterAttackStep_ = 0.0;
       limiterGain_ = std::min(targetGain, limiterGain_ + (1.0 - limiterGain_) *
                                                              releaseCoeff_);
+    }
+    if (peak <= 1.0e-12 && windowPeak <= 1.0e-12
+        && std::abs(delayedL) <= 1.0e-12 && std::abs(delayedR) <= 1.0e-12) {
+      limiterGain_ = 1.0;
+      limiterAttackTarget_ = 1.0;
+      limiterAttackStep_ = 0.0;
+      peakHead_ = peakCount_ = 0;
+    }
     outputL_ = delayedL * limiterGain_;
     outputR_ = delayedR * limiterGain_;
   }
 
   int64_t xrunTotal_=0, xrunLast_=0;
   bool xrunAvailable_=false, xrunCoverageLost_=false;
+  bool effectsActive_=false;
+  SynthEffects effects_{};
+  uint32_t appliedSequenceContinuous_=0;
+  SynthSequenceTransport sequence_{};
+  int32_t nextSequenceId_=-1;
   SynthStats stats_{};
   int maxVoices_, profile_, renderSampleRate_ = 48000;
   std::atomic<int> reportedSampleRate_{48000};
@@ -796,8 +1012,10 @@ private:
   std::vector<double> delayL_, delayR_, peakValues_;
   std::vector<int64_t> peakIndices_;
   int lookahead_ = 1, delayIndex_ = 0, peakHead_ = 0, peakCount_ = 0;
-  uint64_t sampleIndex_ = 0;
+  uint64_t sampleIndex_ = 0, voiceOrder_ = 0;
+  std::array<SynthLiveIdentity,kMaxVoices> identities_{};
   double releaseCoeff_ = 0.0, limiterGain_ = 1.0, smoothedMaster_ = 1.0;
+  double limiterAttackTarget_ = 1.0, limiterAttackStep_ = 0.0;
   double outputL_ = 0.0, outputR_ = 0.0;
 };
 
@@ -858,6 +1076,9 @@ void applyExtras(JNIEnv *env, Command &command, jdoubleArray extras,
   command.spatial = v[9] != 0.0;
   command.spatialX = v[10];
   command.spatialY = v[11];
+  command.voiceId = static_cast<int32_t>(v[12]);
+  if(command.voiceId) command.type=SYNTH_CMD_HELD_ON;
+  for(int i=0;i<2;i++) {double *p=v+13+i*6;auto &l=command.modulations.lfo[i];l.enabled=(int)p[0];l.waveform=(int)p[1];l.target=(int)p[2];l.rateHz=p[3];l.depth=p[4];l.syncBeats=p[5];}
 }
 } // namespace
 
@@ -979,4 +1200,40 @@ Java_ti_synthengine_SynthThread_nativeStatsControl(JNIEnv *, jclass, jlong handl
   auto e=fromHandle(handle);
   if(operation==3) e->close();
   else if(operation==2) e->resetStats(); else e->enableStats(operation==1);
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_ti_synthengine_SynthThread_nativeVoiceMask(JNIEnv *,jclass,jlong handle,jint id) {
+  return fromHandle(handle)->voiceMaskForId(id);
+}
+extern "C" JNIEXPORT jboolean JNICALL Java_ti_synthengine_SynthThread_nativeVoiceCommand(JNIEnv *env,jclass,jlong handle,jint type,jint id,jint mask,jdoubleArray values) {
+  Command c; c.type=type; c.voiceId=id; c.liveMask=static_cast<uint32_t>(mask);
+  if(values && env->GetArrayLength(values)>=SYNTH_LIVE_COUNT)env->GetDoubleArrayRegion(values,0,SYNTH_LIVE_COUNT,c.liveValues);
+  if(type==6 && values && env->GetArrayLength(values)==21) {
+    double v[12];env->GetDoubleArrayRegion(values,9,12,v);c.hasModulations=true;
+    for(int i=0;i<2;i++){double *p=v+i*6;auto &l=c.modulations.lfo[i];l.enabled=(int)p[0];l.waveform=(int)p[1];l.target=(int)p[2];l.rateHz=p[3];l.depth=p[4];l.syncBeats=p[5];}
+  }
+  if(type==7 && values && env->GetArrayLength(values)==12) {
+    double v[12];env->GetDoubleArrayRegion(values,0,12,v);
+    for(int i=0;i<2;i++){double *p=v+i*6;auto &l=c.modulations.lfo[i];l.enabled=(int)p[0];l.waveform=(int)p[1];l.target=(int)p[2];l.rateHz=p[3];l.depth=p[4];l.syncBeats=p[5];}
+  }
+  return fromHandle(handle)->enqueue(c);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ti_synthengine_SynthThread_nativePublishSequence(JNIEnv *env,jclass,jlong handle,jdoubleArray packet,jboolean restart) {
+  if(!packet)return false;
+  std::vector<double> data(env->GetArrayLength(packet));env->GetDoubleArrayRegion(packet,0,(jsize)data.size(),data.data());
+  return fromHandle(handle)->publishSequence(data.data(),(int)data.size(),restart);
+}
+extern "C" JNIEXPORT void JNICALL Java_ti_synthengine_SynthThread_nativeStopSequence(JNIEnv *,jclass,jlong handle) {fromHandle(handle)->stopSequence();}
+extern "C" JNIEXPORT jdoubleArray JNICALL Java_ti_synthengine_SynthThread_nativeSequenceState(JNIEnv *env,jclass,jlong handle) {
+  auto s=fromHandle(handle)->sequenceState();double values[5]={(double)s.playing,(double)s.stepIndex,s.beat,s.bpm,(double)s.revision};
+  auto result=env->NewDoubleArray(5);if(result)env->SetDoubleArrayRegion(result,0,5,values);return result;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_ti_synthengine_SynthThread_nativeMasterProcessing(JNIEnv *env,jclass,jlong handle,jdoubleArray values) {
+  if(!values||env->GetArrayLength(values)!=17)return false;
+  double p[17];env->GetDoubleArrayRegion(values,0,17,p);Command c;c.type=8;
+  auto &v=c.effects;v.inputGain=p[0];v.chorus={(int)p[1],p[2],p[3],p[4]};
+  v.delay={(int)p[5],p[6],p[7],p[8],p[9]};v.reverb={(int)p[10],p[11],p[12],p[13]};v.saturation={(int)p[14],p[15],p[16]};
+  if(!synth_effects_validate(&v))return false;return !fromHandle(handle)->enqueue(c);
 }

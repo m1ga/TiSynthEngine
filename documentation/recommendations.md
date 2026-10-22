@@ -109,8 +109,8 @@ Use the [integration guide](guide.md#integrate-binaural-in-a-2d-app) to convert 
 
 ## Known limits
 
-- There are no per-voice handles. A single active note cannot be edited or stopped; `stopAll()` affects the whole pool.
-- Every event has a finite duration of at most 60 seconds. There is no looping.
+- Use `noteOn` with app-supplied IDs for individual release and compatible live updates. Detect the methods in beta binaries; timed events do not return voice handles.
+- Timed tones, chords and pattern steps last at most 60 seconds. Sustained `noteOn` voices last until release, replacement or shutdown.
 - The module synthesizes waveforms and does not play audio files.
 - Only one pattern scheduler is pending at a time.
 - There is no completion event for a single note or chord. Patterns report their end through `patternend`, which is the only event the module emits.
@@ -122,4 +122,4 @@ Use the [integration guide](guide.md#integrate-binaural-in-a-2d-app) to convert 
 - There is no effects bus: no reverb, delay or chorus.
 - The module provides generic synthesis primitives and does not emulate hardware cycle by cycle.
 
-Use a sample player or a dedicated music engine when a product needs streaming, loop points, per-voice control or a synchronized composition timeline.
+Use a sample player or a dedicated music engine when a product needs streaming, sample loop points or a sample-accurate composition timeline.

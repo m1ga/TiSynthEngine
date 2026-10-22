@@ -40,5 +40,5 @@ public class StatsApiRegression {
  for name,text in sources.items():
   f=p/name;f.parent.mkdir(parents=True,exist_ok=True);f.write_text(text)
  native=root/'android/src/ti/synthengine'
- subprocess.run(['javac','-d',folder,*map(str,p.rglob('*.java')),*map(str,[native/n for n in ['SynthContract.java','SynthDsp.java','SynthThread.java','TiSynthEngineModule.java']])],check=True)
+ subprocess.run(['javac','-d',folder,*map(str,p.rglob('*.java')),*map(str,[native/n for n in ['SynthContract.java','SynthStudioContract.java','SynthDsp.java','SynthThread.java','TiSynthEngineModule.java']])],check=True)
  subprocess.run(['java','-cp',folder,'ti.synthengine.StatsApiRegression'],check=True)

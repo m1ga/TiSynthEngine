@@ -4,11 +4,11 @@ Module id: `ti.synthengine`
 
 Public API version: `1.0.0`
 
-Android and iOS expose the same eleven methods, one event, defaults, limits, waveform values and validation behavior. Option objects are strict: an unknown key is rejected with `unsupported_option`.
+Android and iOS expose the same nineteen methods, one event, defaults, limits, waveform values and validation behavior. Option objects are strict: an unknown key is rejected with `unsupported_option`.
 
 ## Return values
 
-`startEngine`, `playTone`, `playChord`, `playPattern` and `setVolume` return a Boolean. `true` means the request was accepted. `false` means validation failed, the engine was unavailable, or the native command queue was full.
+`startEngine`, `playTone`, `playChord`, `playPattern`, `noteOn`, `noteOff`, `updateVoice` and `setVolume` return a Boolean. `true` means the request was accepted. `false` means validation failed, the engine was unavailable, or the native command queue was full.
 
 `setStatsEnabled` also returns Boolean acceptance. `stopAll`, `resetStats` and `shutdown` do not return a value. `getDefaults` returns the contract object described below. `getStats` returns a new statistics snapshot.
 
@@ -134,6 +134,75 @@ The profile, voice capacity and audio session stay fixed for the session. Call `
 
 On iOS, `playback` ignores the silent switch and interrupts other apps' audio. `ambient` is muted by the silent switch and mixes with other apps' audio. The module applies the category again when it resumes after a route change.
 
+## `noteOn(options)`
+
+Starts a sustained native voice. Detect `typeof synth.noteOn === 'function'`, `noteOff` and `updateVoice` before using these beta capabilities; `apiVersion` remains `1.0.0`. There is no duration limit and no JavaScript timer holds the note.
+
+| Field | Rule |
+| --- | --- |
+| `voiceId` | Required positive integer, 1-2,147,483,647, supplied by the app. |
+| `frequency`, `note` | Optional mutually exclusive pitch; default 440 Hz, same ranges as playTone. |
+| `attack`, `decay`, `sustain`, `release` | ADSR configuration for this attack; release begins only on noteOff. Same individual ranges as playTone, without a duration budget. |
+| `volume` | Initial voice level, 0-2; default 1. |
+| `waveType` | One of the six waveTypes; fixed for this attack. |
+| `pan` | Fixed stereo position, −1…1. Conflicts with spatial coordinates. |
+| `lfoFreq`, `lfoDepth` | Initial vibrato, 0-20,000 Hz; default 0. |
+| `noiseRate`, `lowPassHz` | Fixed noise clock / one-pole cutoff, 0 through the frequency maximum; default 0. |
+| `pulseWidth` | Initial square-wave duty cycle, 0.05-0.95; default 0.5. |
+| `waveTable` | Fixed table of 2-64 samples in −1…1; required for WAVETABLE. |
+| `bitDepth` | Fixed amplitude quantization, 0 or integer 2-16; default 0. |
+| `filterType` | Fixed none/lowpass/highpass/bandpass; default none. |
+| `filterHz`, `filterQ` | Initial cutoff and Q; a non-none filter type is required. |
+| `fmRatio`, `fmDepth` | Initial sine FM; same rules and ranges as playTone. |
+| `detune` | Initial pitch offset in cents, −1200…1200; default 0. |
+| `spatialX`, `spatialY` | Fixed binaural position in −1…1; omitted for stereo. |
+| `modulations` | Up to two native LFOs; see Additional voice modulation. |
+
+No `duration` or temporal `*End` targets are accepted. Source, table, filter type, position and envelope configuration remain fixed until the next attack. Other initial defaults and cross-field validation rules match `playTone`.
+
+Sustained voices apply a minimum 3 ms attack and release edge to prevent a hard gate when the requested time is 0-2 ms. Longer ADSR times are unchanged. Timed tones and patterns retain their existing envelope behavior.
+
+The app supplies IDs and should never reuse one during its session. Reusing an active ID explicitly replaces that attack, snapshots a 6 ms fade tail and uses at least 6 ms attack for the replacement. With a full pool, release voices are replaced first, then the oldest attack. Timed-only events retain their existing replacement policy and sound. A former ID cannot control its replacement.
+
+## `noteOff(options)`
+
+| Field | Rule |
+| --- | --- |
+| `voiceId` | Required positive integer, 1-2,147,483,647. |
+
+Begins release from the current level, including during attack or decay. Repeated release requests never restart or lengthen a release. An ended or stolen ID is a no-op. `true` reports validation and queue publication, not proof of an audible voice. On `false` from a full queue, an instrument should retry twice at 16 ms intervals, then shut down and report failure if release still cannot be published.
+
+## `updateVoice(options)`
+
+| Field | Rule |
+| --- | --- |
+| `voiceId` | Required positive integer, 1-2,147,483,647. |
+| `frequency`, `note` | Mutually exclusive target pitch. Same frequency/note ranges as playTone. |
+| `volume` | Target voice level, 0-2. |
+| `filterHz`, `filterQ` | Target cutoff/Q; only for a voice that started with a resonant filter. |
+| `lfoFreq`, `lfoDepth` | Target vibrato rate/deviation, 0-20,000 Hz. |
+| `pulseWidth` | Target duty cycle, 0.05-0.95; only for a square voice. |
+| `fmRatio`, `fmDepth` | Target FM ratio 0.1-16 / depth 0-10; only for a sine voice. |
+| `modulations` | Replace up to two native LFOs; empty array disables them while preserving phase. |
+
+At least one change is required. An incompatible change rejects the entire request when the ID is known; unknown/ended IDs accept publication as a no-op. The callback also checks source compatibility before applying a command. Changed continuous parameters ramp linearly from their current values over 10 ms. New targets retarget that ramp without restarting oscillator phase or the envelope. Unchanged parameters retain their current ramps. This also works during release.
+
+Pitch updates are absolute: an initial `detune` is already included in the note's starting frequency. To edit tuning later, compute the desired effective frequency in the app and send `frequency`. There is no `detune` update field. Filter type, ADSR, noise clock, one-pole cutoff, quantization, stereo/binaural position and table are new-attack configuration; they are not active-voice update fields.
+
+```javascript
+if (typeof synth.noteOn !== 'function' || typeof synth.noteOff !== 'function' ||
+    typeof synth.updateVoice !== 'function') throw new Error('Sustained voices unavailable')
+if (!synth.noteOn({ voiceId: 1, note: 'C4', attack: 8, decay: 180, sustain: 0.6,
+  release: 300, filterType: 'lowpass', filterHz: 1200, volume: 0.25 })) {
+  throw new Error('Note rejected')
+}
+synth.updateVoice({ voiceId: 1, filterHz: 3600 })
+synth.noteOff({ voiceId: 1 })
+```
+
+Panic, owner close and background transitions should cancel app scheduling and call `shutdown()`. `stopAll()` fades current voices but does not cancel future pattern steps. The single app scheduler must own cancellation and release retries.
+
+
 ## `playTone(options)`
 
 Plays one pitch. It uses 440 Hz when neither pitch field is present. Note names accept C through B or DO, RE, MI, FA, SOL, LA, SI and TI, followed by optional `#` or lowercase `b` and one octave digit from 0 to 9. Letters are case-insensitive, the omitted octave is 4, and A4 is 440 Hz. A valid named pitch is limited to the active frequency ceiling when rendered; an out-of-range numeric `frequency` is rejected.
@@ -175,6 +244,71 @@ Plays one pitch. It uses 440 Hz when neither pitch field is present. Note names 
 Omitted attack/release values are shortened to fit an event smaller than the default envelope. Explicit values must satisfy the documented envelope rules. `getDefaults()` reports the baseline defaults, not these per-event adjustments.
 
 The controls from `decay` to `detune` are described in [Expressive controls](#expressive-controls), including the rules that tie them together.
+
+## Native sequence transport
+
+Detect `playSequence`, `updateSequence`, `stopSequence` and `getSequenceState` by method presence; beta `apiVersion` remains `1.0.0`. The audio callback advances this transport in samples. JavaScript publishes edits and may poll position, without scheduling notes or releases. The older `playPattern` retains its timer-based contract.
+
+`playSequence(options)` starts at step zero. `updateSequence(changes)` merges root fields and the `voice` dictionary into the last accepted configuration; `steps` replaces the complete step list. Both return Boolean publication acceptance, before audio applies the revision. Validation, bank exhaustion or a full publication mailbox reject the whole edit. Three preallocated banks keep the callback free of allocation and locks. Retry rejected edits outside the callback.
+
+| Root field | Rule |
+| --- | --- |
+| `steps` | Required on play, 1-512 step objects. |
+| `bpm` | 20-300, default 120. Applied at the next audio block without resetting musical position or scheduled gates. |
+| `swing` | -0.75-0.75, default 0; positive values lengthen the first sixteenth and shorten the second by the same fraction, negative values reverse that pair. Changes begin at the next pair. |
+| `loop` | Boolean, default true. False stops after one traversal and releases transport voices. |
+| `mode` | `normal`, `up`, `down`, `updown`; default normal. Arpeggios sort sounding steps by their first MIDI note; rests participate only in normal mode. Updown does not repeat endpoints. |
+| `tuning`, `detune` | A4 in Hz, 220-880 (default 440); cents −1200-1200 (default 0). Every effective pitch is checked against the current frequency limit. |
+| `voice` | Initial noteOn shaping options, excluding voiceId, note, frequency and detune. Source, ADSR, stereo/binaural position and table apply to new attacks. |
+
+Each step has either `notes` (1-32 integer MIDI values, 12-119, duplicates allowed) or `rest: true`. `gate` is 0.01-1, default 0.8, of that swung sixteenth. Optional `overrides` merges voice shaping over the root voice. Chords on sequence steps are independent of the keyboard's chord mode. A chord receives fixed initial event compensation; adding independent notes does not change existing gains.
+
+Structural edits apply at the next step. Compatible continuous voice parameters use 10 ms ramps without restarting phases. Shortened loops wrap their cursor into the new traversal. Starting `playPattern` stops future transport events; starting `playSequence` cancels future pattern events. Existing releases are preserved. Transport and keyboard share the configured voice pool, at most 32 voices, with the sustained-note stealing policy.
+
+`stopSequence()` returns Boolean and releases only transport-owned voices at the next block. Gates are owned by voice slots and execute without using the public command queue, even when that queue is full. `getSequenceState()` returns `{ playing, step, beat, position, bpm, revision }`; step is the original zero-based step index (−1 before the first step), beat/position count quarter notes, and revision identifies the applied configuration. Polling does not alter timing.
+
+```javascript
+if (typeof synth.playSequence !== 'function') throw new Error('Native transport unavailable')
+if (!synth.playSequence({ bpm: 120, loop: true, voice: { volume: 0.2 },
+  steps: [{ notes: [60, 64, 67], gate: 0.7 }, { rest: true }, { notes: [67] }] })) {
+  throw new Error('Sequence rejected')
+}
+synth.updateSequence({ bpm: 137 })
+// UI polling may read synth.getSequenceState(); music continues without it.
+synth.stopSequence()
+```
+
+## `setMasterProcessing(options)`
+
+Native stereo chain: voices → fixed input gain → chorus → ping-pong delay → reverb → master volume → optional saturation → final lookahead limiter. Independent notes never trigger voice-count normalization. The limiter remains the final protection.
+
+Returns Boolean acceptance. Partial updates merge into the last accepted processing configuration, validate the complete result and publish atomically. Continuous controls ramp over 10 ms. Unknown fields, numeric booleans and non-finite values reject the whole edit. Detect method presence before use.
+
+| Section | Fields and initial values |
+| --- | --- |
+| Root | `inputGain`: 0-4, initially 1. |
+| `chorus` | `enabled`: false; `rate`: 0.05-5 Hz, initially 0.8; `depth`: 0-1, initially 0.4; `mix`: 0-1, initially 0.25. Stereo interpolated delay with offset modulation phases. |
+| `delay` | `enabled`: false; `timeMs`: 20-2000, initially 250; `sync`: off; `feedback`: 0-0.85, initially 0.3; `mix`: 0-1, initially 0.25. Ping-pong feedback and crossfade between changed read positions, up to four seconds reserved. |
+| `reverb` | `enabled`: false; `decay`: 0.2-8 seconds, initially 1.5; `damping`: 0-1, initially 0.5; `mix`: 0-1, initially 0.2. Stereo damped comb/allpass Schroeder network. |
+| `saturation` | `enabled`: false; `drive`: 1-4, initially 1; `mix`: 0-1, initially 1. Creative soft waveshaping that changes timbre. |
+
+Delay sync accepts `off`, `quarter`, `eighth`, `sixteenth`, `quarterTriplet`, `eighthTriplet` or `sixteenthTriplet`. Sync follows the native transport BPM, initially 120. Disabling an effect gradually closes its input and drains its tail, then restores exact bypass. Tails are bounded to 30 seconds with a final fade. `stopAll()` performs panic: it fades voices, stops the new transport and invalidates effect histories in bounded work. It retains the behavior of not canceling future playPattern timer events. `shutdown()` cancels both schedulers and frees buffers off the callback.
+
+Defaults keep all effects and saturation disabled, input gain at unity, and preserve the earlier render exactly. Enabling saturation is an explicit sound-design choice. Output protection is still required with dense voices and effect feedback.
+
+## Additional voice modulation
+
+`noteOn` and `updateVoice` accept `modulations`, an array of up to two LFO objects. An empty array disables them. Omission on update preserves the previous configuration. Each object accepts only these fields:
+
+| Field | Rule |
+| --- | --- |
+| `wave` | `sine` (default) or `triangle`. |
+| `target` | Required: `filterHz`, `pulseWidth` or `fmDepth`. Requires an active resonant filter, square source or sine source respectively. An explicit FM ratio with zero base depth is permitted when an FM-target LFO is enabled. |
+| `rate` | 0-20 Hz, default 1. Zero permits a stationary free-running phase. |
+| `depth` | 0-1, default 0; scales up to four cutoff octaves, 0.45 PWM offset or ten FM-index units. Two contributions sum with safe clamping. |
+| `sync` | Same musical values as delay; default off. Synced rates follow native tempo (up to 30 Hz at 300 BPM in sixteenth-note triplets). |
+
+Edits preserve oscillator/LFO phases. Continuous modulation contributions ramp over 10 ms; cutoff stays within 20 Hz and the frequency maximum, PWM within 0.05-0.95, FM index within 0-10. Initial modulations may also be inherited by sequence voices and overridden per step.
 
 ## `playChord(options)`
 
@@ -467,6 +601,8 @@ Returns a new snapshot without resetting counters. Available before start and af
 | `peakRenderLoad`           | Maximum callback load in this diagnostic window.                                                                                        |
 | `outputPeakDbFS`           | `{ left, right }` peaks of final float output in the latest completed approximately 200 ms window.                                      |
 | `outputRmsDbFS`            | `{ left, right }` RMS of that same window.                                                                                              |
+| `preLimiterPeakDb` | Maximum native peak before the limiter since reset, in dBFS; diagnostics required. |
+| `maxLimiterReductionDb` | Maximum native limiter attenuation since reset, in dB; a brief intervention persists across UI polls. |
 | `limiterReductionDb`       | Maximum limiter attenuation in that window, as a positive dB magnitude.                                                                 |
 | `underrunCount`            | Android Oboe accumulated backend xruns since reset/start when supported; otherwise `null`.                                              |
 | `bufferFrames`             | Android Oboe output buffer size; otherwise `null`. This is distinct from `callbackFrames`.                                              |

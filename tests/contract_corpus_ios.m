@@ -37,7 +37,13 @@ int main(void)
       NSDictionary *options = golden[@"options"];
       double maxFrequency = [golden[@"max"] doubleValue];
       NSDictionary *failure;
-      if ([method isEqualToString:@"playTone"]) {
+      if ([method isEqualToString:@"noteOn"]) {
+        failure = [TiSynthengineContract validateNoteOn:options maxFrequency:maxFrequency];
+      } else if ([method isEqualToString:@"noteOff"]) {
+        failure = [TiSynthengineContract validateNoteOff:options];
+      } else if ([method isEqualToString:@"updateVoice"]) {
+        failure = [TiSynthengineContract validateUpdateVoice:options maxFrequency:maxFrequency];
+      } else if ([method isEqualToString:@"playTone"]) {
         failure = [TiSynthengineContract validateTone:options maxFrequency:maxFrequency];
       } else if ([method isEqualToString:@"playChord"]) {
         failure = [TiSynthengineContract validateChord:options maxFrequency:maxFrequency];

@@ -32,6 +32,10 @@ static const double ContractMaxFmRatio = 16.0;
 static const double ContractMaxFmDepth = 10.0;
 static const double ContractMaxDetuneCents = 1200.0;
 
+static NSString *StudioFilterName(id value) {
+ return [value isKindOfClass:[NSString class]] ? [[value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString] : @"none";
+}
+
 static BOOL HasKey(NSDictionary *options, NSString *key)
 {
   return options != nil && [options objectForKey:key] != nil;
@@ -177,6 +181,14 @@ static NSDictionary *RejectUnknownOptions(NSDictionary *options, NSArray *suppor
     }
   }
   return nil;
+}
+
+static NSDictionary *ValidateVoiceId(NSDictionary *options)
+{
+  if(!HasKey(options,@"voiceId")) return Failure(@"voiceId",@"missing_required",nil);
+  NSDictionary *failure=OptionalInteger(options,@"voiceId",1,INT32_MAX); if(failure)return failure;
+  double value=[options[@"voiceId"] doubleValue];
+  return value==rint(value) ? nil : Failure(@"voiceId",@"not_integer",options[@"voiceId"]);
 }
 
 static NSArray *FilterTypes(void)
@@ -481,6 +493,52 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
   return OptionalDouble(options, @"volume", 0.0, 2.0);
 }
 
++ (NSDictionary *)validateNoteOn:(NSDictionary *)options maxFrequency:(double)maxFrequency
+{
+  NSDictionary *failure=RejectUnknownOptions(options,@[@"voiceId", @"frequency", @"note", @"attack", @"decay", @"sustain", @"release", @"volume",
+      @"waveType", @"pan", @"lfoFreq", @"lfoDepth", @"noiseRate", @"lowPassHz", @"pulseWidth", @"waveTable", @"bitDepth",
+      @"filterType", @"filterHz", @"filterQ", @"fmRatio", @"fmDepth", @"detune", @"spatialX", @"spatialY", @"modulations"]);
+  if(failure) return failure;
+  if(!HasKey(options,@"voiceId")) return Failure(@"voiceId",@"missing_required",nil);
+  failure=ValidateVoiceId(options); if(failure)return failure;
+  NSMutableDictionary *tone=[NSMutableDictionary dictionaryWithDictionary:options];
+  if(options[@"modulations"]) {
+    failure=OptionalInteger(options,@"waveType",0,5);if(failure)return failure;
+    failure=OptionalDouble(options,@"fmDepth",0,10);if(failure)return failure;
+    double mods[12];
+    failure=[self prepareModulations:options[@"modulations"] values:mods waveType:[options[@"waveType"] intValue] filterType:![StudioFilterName(options[@"filterType"]) isEqual:@"none"] ? 1:0];
+    if(failure)return failure;
+    failure=OptionalDouble(tone,@"fmRatio",.1,16);if(failure)return failure;
+    if([tone[@"fmDepth"] doubleValue]==0)for(int i=0;i<2;i++)if(mods[i*6]&&mods[i*6+2]==2)[tone removeObjectForKey:@"fmRatio"];
+  }
+  [tone removeObjectForKey:@"modulations"];
+  [tone removeObjectForKey:@"voiceId"]; tone[@"duration"]=@60000;
+  return [self validateTone:tone maxFrequency:maxFrequency];
+}
++ (NSDictionary *)validateNoteOff:(NSDictionary *)options
+{
+  NSDictionary *failure=RejectUnknownOptions(options,@[@"voiceId"]); if(failure)return failure;
+  if(!HasKey(options,@"voiceId")) return Failure(@"voiceId",@"missing_required",nil);
+  return ValidateVoiceId(options);
+}
++ (NSDictionary *)validateUpdateVoice:(NSDictionary *)options maxFrequency:(double)maxFrequency
+{
+  NSDictionary *failure=RejectUnknownOptions(options,@[@"voiceId", @"frequency", @"note", @"volume", @"filterHz", @"filterQ",
+      @"lfoFreq", @"lfoDepth", @"pulseWidth", @"fmRatio", @"fmDepth", @"modulations"]);
+  if(failure)return failure;
+  if(!HasKey(options,@"voiceId")) return Failure(@"voiceId",@"missing_required",nil);
+  failure=ValidateVoiceId(options); if(failure)return failure;
+  if(options.count==1)return Failure(@"changes",@"missing_required",nil);
+  if(HasKey(options,@"frequency")&&HasKey(options,@"note"))return Failure(@"frequency",@"conflicting_pitch_fields",options[@"frequency"]);
+  failure=OptionalDouble(options,@"frequency",1,maxFrequency); if(failure)return failure;
+  if(HasKey(options,@"note")) {
+    failure=ValidNote(options[@"note"],@"note"); if(failure)return failure;
+    if(StrictNoteFrequency(options[@"note"])>maxFrequency)return Failure(@"note",@"out_of_range",options[@"note"]);
+  }
+  if(options[@"modulations"]) {double mods[12];failure=[self prepareModulations:options[@"modulations"] values:mods waveType:-1 filterType:-1];if(failure)return failure;}
+  return ValidateVoiceOptions(options,maxFrequency,YES);
+}
+
 + (NSDictionary *)validateTone:(NSDictionary *)options maxFrequency:(double)maxFrequency
 {
   NSDictionary *failure = RejectUnknownOptions(options,
@@ -731,6 +789,123 @@ static NSDictionary *OptionalNoteValue(NSDictionary *options, NSString *key)
     @"filterTypes": FilterTypes(),
     @"waveTypes": @{ @"SINE": @0, @"SQUARE": @1, @"SAWTOOTH": @2, @"TRIANGLE": @3, @"NOISE": @4, @"WAVETABLE": @5 }
   };
+}
+
++ (NSDictionary *)prepareModulations:(id)raw values:(double *)values waveType:(int)wave filterType:(int)filter
+{
+  memset(values,0,12*sizeof(double));
+  if(![raw isKindOfClass:[NSArray class]] || [raw count]>2)return Failure(@"modulations",@"invalid_array",raw);
+  NSArray *sync=@[@"off",@"quarter",@"eighth",@"sixteenth",@"quarterTriplet",@"eighthTriplet",@"sixteenthTriplet"];
+  double beats[]={0,1,.5,.25,2.0/3,1.0/3,1.0/6};
+  int i=0;
+  for(id item in raw) {
+    if(![item isKindOfClass:[NSDictionary class]])return Failure(@"modulations",@"not_object",item);
+    NSDictionary *f=RejectUnknownOptions(item,@[@"wave",@"target",@"rate",@"depth",@"sync"]);if(f)return f;
+    NSArray *waves=@[@"sine",@"triangle"], *targets=@[@"filterHz",@"pulseWidth",@"fmDepth"];
+    NSUInteger w=[waves indexOfObject:item[@"wave"] ?: @"sine"], t=[targets indexOfObject:item[@"target"] ?: @""];
+    NSUInteger b=[sync indexOfObject:item[@"sync"] ?: @"off"];
+    if(w==NSNotFound||t==NSNotFound||b==NSNotFound)return Failure(@"modulations",@"unsupported_value",item);
+    if((t==0&&filter==0)||(t==1&&wave>=0&&wave!=1)||(t==2&&wave>=0&&wave!=0))return Failure(@"modulations",@"incompatible_voice_source",item);
+    f=OptionalDouble(item,@"rate",0,20);if(f)return f;
+    f=OptionalDouble(item,@"depth",0,1);if(f)return f;
+    values[i++]=1;values[i++]=w;values[i++]=t;values[i++]=item[@"rate"]?[item[@"rate"] doubleValue]:1;
+    values[i++]=item[@"depth"]?[item[@"depth"] doubleValue]:0;values[i++]=beats[b];
+  }
+  return nil;
+}
+
++ (NSDictionary *)prepareMasterProcessing:(NSDictionary *)options config:(SynthEffectsConfig *)config
+{
+  if(![options isKindOfClass:[NSDictionary class]])return Failure(@"options",@"not_object",options);
+  NSDictionary *f=RejectUnknownOptions(options,@[@"inputGain",@"chorus",@"delay",@"reverb",@"saturation"]);if(f)return f;
+  SynthEffectsConfig c=*config;
+  f=OptionalDouble(options,@"inputGain",0,4);if(f)return f;if(options[@"inputGain"])c.inputGain=[options[@"inputGain"] doubleValue];
+  for(NSString *section in @[@"chorus",@"delay",@"reverb",@"saturation"]) {
+    NSDictionary *part=options[section];if(!part)continue;
+    if(![part isKindOfClass:[NSDictionary class]])return Failure(section,@"not_object",part);
+    NSArray *keys=[section isEqual:@"chorus"]?@[@"enabled",@"rate",@"depth",@"mix"]:[section isEqual:@"delay"]?@[@"enabled",@"timeMs",@"sync",@"feedback",@"mix"]:[section isEqual:@"reverb"]?@[@"enabled",@"decay",@"damping",@"mix"]:@[@"enabled",@"drive",@"mix"];
+    f=RejectUnknownOptions(part,keys);if(f)return f;
+    if(part[@"enabled"]&&CFGetTypeID((__bridge CFTypeRef)part[@"enabled"])!=CFBooleanGetTypeID())return Failure(@"enabled",@"not_boolean",part[@"enabled"]);
+    for(NSString *key in keys) {
+      id v=part[key];if(!v||[key isEqual:@"enabled"]||[key isEqual:@"sync"])continue;
+      double low=0,high=1;
+      if([key isEqual:@"rate"]){low=.05;high=5;}if([key isEqual:@"timeMs"]){low=20;high=2000;}
+      if([key isEqual:@"feedback"])high=.85;if([key isEqual:@"decay"]){low=.2;high=8;}if([key isEqual:@"drive"]){low=1;high=4;}
+      f=OptionalDouble(part,key,low,high);if(f)return f;
+    }
+#define SET(field,key) if(part[@key]) c.field=[part[@key] doubleValue]
+    if([section isEqual:@"chorus"]) {SET(chorus.enabled,"enabled");SET(chorus.rateHz,"rate");SET(chorus.depth,"depth");SET(chorus.mix,"mix");}
+    if([section isEqual:@"delay"]) {SET(delay.enabled,"enabled");SET(delay.timeMs,"timeMs");SET(delay.feedback,"feedback");SET(delay.mix,"mix");
+      if(part[@"sync"]) {NSArray *names=@[@"off",@"quarter",@"eighth",@"sixteenth",@"quarterTriplet",@"eighthTriplet",@"sixteenthTriplet"];double beats[]={0,1,.5,.25,2.0/3,1.0/3,1.0/6};NSUInteger index=[names indexOfObject:part[@"sync"]];if(index==NSNotFound)return Failure(@"sync",@"unsupported_value",part[@"sync"]);c.delay.syncBeats=beats[index];}}
+    if([section isEqual:@"reverb"]) {SET(reverb.enabled,"enabled");SET(reverb.decay,"decay");SET(reverb.damping,"damping");SET(reverb.mix,"mix");}
+    if([section isEqual:@"saturation"]) {SET(saturation.enabled,"enabled");SET(saturation.drive,"drive");SET(saturation.mix,"mix");}
+#undef SET
+  }
+  if(!synth_effects_validate(&c))return Failure(@"options",@"out_of_range",options);
+  *config=c;return nil;
+}
+
++ (NSDictionary *)sequenceStateObject:(const SynthSequenceState *)state
+{
+ return @{@"playing":state->playing ? @YES : @NO,@"step":@(state->stepIndex),@"beat":@(state->beat),@"position":@(state->beat),@"bpm":@(state->bpm),@"revision":@(state->revision)};
+}
+
++ (NSMutableDictionary *)mergeSequenceVoice:(NSDictionary *)previous changes:(NSDictionary *)changes
+{
+ NSMutableDictionary *v=[previous mutableCopy];
+ if([changes[@"filterType"] isKindOfClass:[NSString class]]&&[StudioFilterName(changes[@"filterType"]) isEqual:@"none"])for(NSString *key in @[@"filterHz",@"filterQ"])if(!changes[key])[v removeObjectForKey:key];
+ if([changes[@"waveType"] isKindOfClass:[NSNumber class]]&&[changes[@"waveType"] intValue]!=0)for(NSString *key in @[@"fmRatio",@"fmDepth"])if(!changes[key])[v removeObjectForKey:key];
+ BOOL fmModulation=NO;id mods=changes[@"modulations"]?:previous[@"modulations"];
+ if([mods isKindOfClass:[NSArray class]])for(id item in mods)if([item isKindOfClass:[NSDictionary class]]&&[item[@"target"] isEqual:@"fmDepth"])fmModulation=YES;
+ if([changes[@"fmDepth"] isKindOfClass:[NSNumber class]]&&[changes[@"fmDepth"] doubleValue]==0&&!changes[@"fmRatio"]&&!fmModulation)[v removeObjectForKey:@"fmRatio"];
+ if(changes[@"pan"])for(NSString *key in @[@"spatialX",@"spatialY"])if(!changes[key])[v removeObjectForKey:key];
+ if((changes[@"spatialX"]||changes[@"spatialY"])&&!changes[@"pan"])[v removeObjectForKey:@"pan"];
+ [v addEntriesFromDictionary:changes];return v;
+}
+
++ (NSDictionary *)prepareSequence:(NSDictionary *)options config:(SynthSequenceConfig *)c maxFrequency:(double)maxFrequency
+{
+  if(![options isKindOfClass:[NSDictionary class]])return Failure(@"options",@"not_object",options);
+  NSDictionary *f=RejectUnknownOptions(options,@[@"steps",@"bpm",@"swing",@"loop",@"mode",@"tuning",@"detune",@"voice"]);if(f)return f;
+  synth_sequence_defaults(c);
+  f=OptionalDouble(options,@"bpm",20,300);if(f)return f;f=OptionalDouble(options,@"swing",-.75,.75);if(f)return f;
+  f=OptionalDouble(options,@"tuning",220,880);if(f)return f;f=OptionalDouble(options,@"detune",-1200,1200);if(f)return f;
+  if(options[@"loop"]&&CFGetTypeID((__bridge CFTypeRef)options[@"loop"])!=CFBooleanGetTypeID())return Failure(@"loop",@"not_boolean",options[@"loop"]);
+  if(options[@"bpm"])c->bpm=[options[@"bpm"] doubleValue];if(options[@"swing"])c->swing=[options[@"swing"] doubleValue];
+  if(options[@"tuning"])c->tuning=[options[@"tuning"] doubleValue];if(options[@"detune"])c->detune=[options[@"detune"] doubleValue];if(options[@"loop"])c->loop=[options[@"loop"] boolValue];
+  NSArray *modes=@[@"normal",@"up",@"down",@"updown"];NSUInteger mode=[modes indexOfObject:options[@"mode"] ?: @"normal"];if(mode==NSNotFound)return Failure(@"mode",@"unsupported_value",options[@"mode"]);c->mode=(int)mode;
+  NSDictionary *voice=options[@"voice"] ?: @{};
+  if(![voice isKindOfClass:[NSDictionary class]])return Failure(@"voice",@"not_object",voice);
+  NSArray *steps=options[@"steps"];
+  if(![steps isKindOfClass:[NSArray class]]||steps.count<1||steps.count>512)return Failure(@"steps",@"invalid_array",steps);
+  c->stepCount=(int)steps.count;
+  NSArray *voiceKeys=@[@"attack",@"decay",@"sustain",@"release",@"volume",@"waveType",@"pan",@"lfoFreq",@"lfoDepth",@"noiseRate",@"lowPassHz",@"pulseWidth",@"waveTable",@"bitDepth",@"filterType",@"filterHz",@"filterQ",@"fmRatio",@"fmDepth",@"spatialX",@"spatialY",@"modulations"];
+  f=RejectUnknownOptions(voice,voiceKeys);if(f)return f;
+  for(int i=0;i<c->stepCount;i++) {
+    NSDictionary *step=steps[i];if(![step isKindOfClass:[NSDictionary class]])return Failure(@"steps",@"not_object",step);
+    f=RejectUnknownOptions(step,@[@"notes",@"rest",@"gate",@"overrides"]);if(f)return f;
+    BOOL rest=step[@"rest"]!=nil;
+    if(rest&&(![step[@"rest"] isEqual:@YES]||CFGetTypeID((__bridge CFTypeRef)step[@"rest"])!=CFBooleanGetTypeID()||step[@"notes"]))return Failure(@"rest",@"invalid_rest",step);
+    NSArray *notes=step[@"notes"];if(!rest&&(![notes isKindOfClass:[NSArray class]]||notes.count<1||notes.count>32))return Failure(@"notes",@"invalid_array",notes);
+    SynthSequenceStep *dst=&c->steps[i];dst->rest=rest;dst->noteCount=rest?0:(int)notes.count;
+    f=OptionalDouble(step,@"gate",.01,1);if(f)return f;if(step[@"gate"])dst->gate=[step[@"gate"] doubleValue];
+    for(int n=0;n<dst->noteCount;n++){double midi;if(!FiniteNumber(notes[n],&midi)||midi!=rint(midi)||midi<12||midi>119)return Failure(@"notes",@"out_of_range",notes[n]);dst->notes[n]=(uint8_t)midi;double hz=synth_sequence_frequency(c,(int)midi);if(hz<1||hz>maxFrequency)return Failure(@"notes",@"out_of_range",notes[n]);}
+    NSDictionary *overrides=step[@"overrides"] ?: @{};if(![overrides isKindOfClass:[NSDictionary class]])return Failure(@"overrides",@"not_object",overrides);
+    f=RejectUnknownOptions(overrides,voiceKeys);if(f)return f;
+    NSMutableDictionary *v=[self mergeSequenceVoice:voice changes:overrides];v[@"voiceId"]=@1;v[@"frequency"]=@440;
+    f=[self validateNoteOn:v maxFrequency:maxFrequency];if(f)return f;
+    SynthSequenceVoice *out=&dst->voice;
+#define FIELD(field,key,def) out->field=v[@key]?[v[@key] doubleValue]:(def)
+    FIELD(volume,"volume",1);FIELD(pan,"pan",0);FIELD(lfoFreq,"lfoFreq",0);FIELD(lfoDepth,"lfoDepth",0);FIELD(noiseRate,"noiseRate",0);FIELD(lowPassHz,"lowPassHz",0);FIELD(pulseWidth,"pulseWidth",.5);
+    FIELD(filterHz,"filterHz",1000);FIELD(filterQ,"filterQ",.7071);FIELD(fmRatio,"fmRatio",1);FIELD(fmDepth,"fmDepth",0);FIELD(sustain,"sustain",1);
+    FIELD(waveType,"waveType",0);FIELD(attack,"attack",50);FIELD(decay,"decay",0);FIELD(release,"release",50);FIELD(bitDepth,"bitDepth",0);
+    FIELD(spatialX,"spatialX",0);FIELD(spatialY,"spatialY",0);out->spatial=v[@"spatialX"]||v[@"spatialY"];
+#undef FIELD
+    out->filterType=(int)[@[@"none",@"lowpass",@"highpass",@"bandpass"] indexOfObject:StudioFilterName(v[@"filterType"])];
+    NSArray *table=v[@"waveTable"];out->wavetableSize=(int)table.count;for(int k=0;k<out->wavetableSize;k++)out->wavetable[k]=[table[k] doubleValue];
+    if(v[@"modulations"]){f=[self prepareModulations:v[@"modulations"] values:out->mods waveType:out->waveType filterType:out->filterType];if(f)return f;}
+  }
+  return synth_sequence_prepare(c)?nil:Failure(@"options",@"invalid_sequence",options);
 }
 
 @end

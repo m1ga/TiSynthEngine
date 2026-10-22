@@ -153,6 +153,7 @@ public final class SynthContractRegression {
                 "gain", "unsupported_option", "volume rejects unknown option");
 
         expressiveContract();
+        heldContract();
         record("playTone", map("spatialX", -1.0, "spatialY", 1.0), SynthContract.validateTone(map("spatialX", -1.0, "spatialY", 1.0), MAX_FREQUENCY));
         record("playTone", map("spatialY", 1.01), SynthContract.validateTone(map("spatialY", 1.01), MAX_FREQUENCY));
         record("playTone", map("spatialY", true), SynthContract.validateTone(map("spatialY", true), MAX_FREQUENCY));
@@ -243,6 +244,33 @@ public final class SynthContractRegression {
         }
         String actual = new String(java.nio.file.Files.readAllBytes(path), java.nio.charset.StandardCharsets.UTF_8);
         assertEquals(actual, expected, "tests/contract_corpus.jsonl matches the Java contract (regenerate with -Dsynth.corpus.out)");
+    }
+
+    private static void heldContract() {
+        for(String method:new String[]{"noteOn","noteOff","updateVoice"}) {
+            for(Object id:new Object[]{1,2147483647,0,-1,1.5,1.0000000001,0.9999999999,true,"1",null,2147483648.0}) {
+                Map<String,Object> o=map("voiceId",id);
+                if(method.equals("updateVoice"))o.put("volume",.5);
+                SynthContract.Validation r=method.equals("noteOn") ? SynthContract.validateNoteOn(o,MAX_FREQUENCY) : method.equals("noteOff") ? SynthContract.validateNoteOff(o) : SynthContract.validateUpdateVoice(o,MAX_FREQUENCY);
+                record(method,o,r);
+                assertTrue(r.accepted==(id instanceof Integer && ((Integer)id)>0),"held ID "+method+" "+id);
+            }
+        }
+        for(String key:new String[]{"duration","frequencyEnd","panEnd","noiseRateEnd","pulseWidthEnd","filterHzEnd","fmDepthEnd"}) {
+            Map<String,Object> o=map("voiceId",1,key,100);
+            assertRejected(record("noteOn",o,SynthContract.validateNoteOn(o,MAX_FREQUENCY)),"held sweep "+key);
+        }
+        Map<String,Object> on=map("voiceId",1,"attack",2000,"decay",4000,"sustain",.5,"release",4000);
+        assertAccepted(record("noteOn",on,SynthContract.validateNoteOn(on,MAX_FREQUENCY)),"held full ADSR");
+        for(String key:new String[]{"attack","release","waveType","filterType","waveTable","spatialX","pan","bitDepth","detune"}) {
+            Map<String,Object> o=map("voiceId",1,key,1);
+            assertRejected(record("updateVoice",o,SynthContract.validateUpdateVoice(o,MAX_FREQUENCY)),"immutable "+key);
+        }
+        Map<String,Object> update=map("voiceId",1,"note","A4","filterHz",500.0,"filterQ",2.0,"fmRatio",2.0);
+        assertAccepted(record("updateVoice",update,SynthContract.validateUpdateVoice(update,MAX_FREQUENCY)),"partial source-compatible ranges");
+        for(Map<String,Object> o:java.util.Arrays.asList(map(),map("voiceId",1),map("voiceId",1,"volume",true),map("voiceId",1,"note","bad"),map("voiceId",1,"note","A4","frequency",440))) {
+            assertRejected(record("updateVoice",o,SynthContract.validateUpdateVoice(o,MAX_FREQUENCY)),"invalid update");
+        }
     }
 
     private static void expressiveContract() {

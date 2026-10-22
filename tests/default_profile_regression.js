@@ -60,7 +60,7 @@ Object.keys(expected).forEach(function (name) {
 })
 
 assert(
-  /readOptionalIntOption\(options, "playTone", "duration",\s*DURATION_DEFAULT_MS/.test(androidModule),
+  /readOptionalIntOption\(options, "playTone", "duration",\s*(?:voiceId>0 \? DURATION_MAX_MS : )?DURATION_DEFAULT_MS/.test(androidModule),
   'Android playTone duration must use the default profile'
 )
 assert(
@@ -68,7 +68,7 @@ assert(
   'Android playChord duration must use the default profile'
 )
 assert(
-  /method:@"playTone" key:@"duration"\s*defaultValue:DURATION_DEFAULT_MS/.test(iosModule),
+  /method:@"playTone" key:@"duration"\s*defaultValue:\(voiceId \? DURATION_MAX_MS : DURATION_DEFAULT_MS\)/.test(iosModule),
   'iOS playTone duration must use the default profile'
 )
 assert(

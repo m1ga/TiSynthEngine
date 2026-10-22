@@ -34,8 +34,19 @@ jobs:
         run: |
           cc -std=c99 -O2 -Wall -Wextra -Wpedantic -o "$RUNNER_TEMP/dsp_core" tests/dsp_core_regression.c -lm
           "$RUNNER_TEMP/dsp_core"
+          cc -std=c11 -O2 -Wall -Wextra -Werror -o "$RUNNER_TEMP/held_core" tests/held_core_regression.c -lm
+          "$RUNNER_TEMP/held_core"
           cc -std=c99 -O2 -Wall -Wextra -Wpedantic -o "$RUNNER_TEMP/spatial" tests/spatial_regression.c -lm
           "$RUNNER_TEMP/spatial"
+
+      - name: Native transport and effects tests
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror tests/sequence_core_regression.c -lm -o "$RUNNER_TEMP/sequence"
+          "$RUNNER_TEMP/sequence"
+          cc -std=c11 -O2 -Wall -Wextra -Werror tests/effects_core_regression.c -lm -o "$RUNNER_TEMP/effects"
+          "$RUNNER_TEMP/effects"
+          cc -std=c11 -O2 -Wall -Wextra -Werror tests/modulation_core_regression.c -lm -o "$RUNNER_TEMP/modulation"
+          "$RUNNER_TEMP/modulation"
 
       - name: Shared statistics tests
         run: |
@@ -43,6 +54,7 @@ jobs:
           c++ -std=c++17 -O2 -Wall -Wextra -pthread tests/stats_regression.cpp -o "$RUNNER_TEMP/stats"
           "$RUNNER_TEMP/stats"
           python3 tests/run_stats_java.py
+          python3 tests/run_studio_java.py
 
       - name: Java contract and DSP tests
         working-directory: android
@@ -50,10 +62,26 @@ jobs:
           test_dir=$(mktemp -d)
           javac -d "$test_dir" \
             src/ti/synthengine/SynthContract.java \
+            src/ti/synthengine/SynthStudioContract.java \
             test/ti/synthengine/SynthContractRegression.java \
+            test/ti/synthengine/SynthHeldContractRegression.java \
             test/ti/synthengine/SynthSpatialContractRegression.java \
             src/ti/synthengine/SynthDsp.java \
             test/ti/synthengine/SynthDspRegression.java
           java -cp "$test_dir" ti.synthengine.SynthContractRegression
+          java -cp "$test_dir" ti.synthengine.SynthHeldContractRegression
           java -cp "$test_dir" ti.synthengine.SynthSpatialContractRegression
           java -cp "$test_dir" ti.synthengine.SynthDspRegression
+
+  ios-contract-tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Replay iOS contracts
+        run: |
+          clang -fobjc-arc -Wall -Wextra -framework Foundation tests/contract_corpus_ios.m ios/Classes/TiSynthengineContract.m -o "$RUNNER_TEMP/contracts"
+          "$RUNNER_TEMP/contracts"
+          clang -fobjc-arc -Wall -Wextra -framework Foundation tests/studio_corpus_ios.m ios/Classes/TiSynthengineContract.m -o "$RUNNER_TEMP/studio-corpus"
+          "$RUNNER_TEMP/studio-corpus"
+          clang -fobjc-arc -Wall -Wextra -framework Foundation tests/studio_contract_ios.m ios/Classes/TiSynthengineContract.m -o "$RUNNER_TEMP/studio-contract"
+          "$RUNNER_TEMP/studio-contract"

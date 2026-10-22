@@ -17,7 +17,7 @@ _Static_assert(__atomic_always_lock_free(8, 0), "Statistics require lock-free 64
 #endif
 enum { ST_ACTIVE, ST_PEAK_ACTIVE, ST_TAILS, ST_SPATIAL, ST_STEALS,
   ST_CALLBACK, ST_LOAD, ST_PEAK_LOAD, ST_PEAK_L, ST_PEAK_R, ST_RMS_L,
-  ST_RMS_R, ST_REDUCTION, SYNTH_STATS_COUNT };
+  ST_RMS_R, ST_REDUCTION, ST_PRE_LIMITER_PEAK, ST_MAX_REDUCTION, SYNTH_STATS_COUNT };
 typedef struct {
   SynthStatsAtomic sequence, config, reset, publishedConfig, publishedReset;
   SynthStatsAtomic published[SYNTH_STATS_COUNT];
@@ -27,7 +27,7 @@ typedef struct {
   uint64_t steals;
   bool enabled;
   int windowFrames;
-  double peakL, peakR, sumL, sumR, minGain, peakLoad;
+  double peakL, peakR, sumL, sumR, minGain, peakLoad, maxPreLimiter, minEverGain;
   double values[SYNTH_STATS_COUNT];
 } SynthStats;
 static inline uint64_t synth_stats_load(const SynthStatsAtomic *p) { return __atomic_load_n(p,__ATOMIC_ACQUIRE); }
@@ -41,7 +41,7 @@ static inline void synth_stats_window(SynthStats *s) {
 static inline void synth_stats_init(SynthStats *s) {
   memset(s,0,sizeof(*s));
   for(int i=ST_LOAD;i<SYNTH_STATS_COUNT;i++) { s->values[i]=NAN; s->published[i]=synth_stats_bits(NAN); }
-  synth_stats_window(s);
+  synth_stats_window(s);s->minEverGain=1;
 }
 static inline void synth_stats_enable(SynthStats *s,bool enabled) {
   uint64_t c=synth_stats_load(&s->config);
@@ -51,7 +51,7 @@ static inline void synth_stats_reset(SynthStats *s) { __atomic_fetch_add(&s->res
 static inline bool synth_stats_begin(SynthStats *s) {
   uint64_t c=synth_stats_load(&s->config), r=synth_stats_load(&s->reset);
   if(c!=s->seenConfig || r!=s->seenReset) {
-    if(r!=s->seenReset) { s->steals=0; s->peakActive=s->active; }
+    if(r!=s->seenReset) { s->steals=0; s->peakActive=s->active; s->maxPreLimiter=0; s->minEverGain=1; }
     s->seenConfig=c; s->seenReset=r; s->enabled=(c&1)!=0;
     s->peakLoad=0; synth_stats_window(s);
     for(int i=ST_LOAD;i<SYNTH_STATS_COUNT;i++) s->values[i]=NAN;
@@ -66,7 +66,11 @@ static inline void synth_stats_voice_start(SynthStats *s,bool occupied,bool oldS
 static inline void synth_stats_voice_end(SynthStats *s,bool spatial) { s->active--; s->spatial-=spatial; }
 static inline void synth_stats_tail_start(SynthStats *s,bool occupied) { if(!occupied) s->tails++; }
 static inline void synth_stats_tail_end(SynthStats *s) { s->tails--; }
+static inline void synth_stats_pre_limiter(SynthStats *s,double l,double r) {
+  s->maxPreLimiter=fmax(s->maxPreLimiter,fmax(fabs(l),fabs(r)));
+}
 static inline void synth_stats_sample(SynthStats *s,float l,float r,double gain,int rate) {
+  s->minEverGain=fmin(s->minEverGain,gain);
   s->peakL=fmax(s->peakL,fabs(l)); s->peakR=fmax(s->peakR,fabs(r));
   s->sumL+=(double)l*l; s->sumR+=(double)r*r; s->minGain=fmin(s->minGain,gain);
   if(++s->windowFrames >= rate/5) {
@@ -88,6 +92,8 @@ static inline void synth_stats_end(SynthStats *s,int frames,int rate,double seco
   s->values[ST_TAILS]=s->tails; s->values[ST_SPATIAL]=s->spatial; s->values[ST_STEALS]=(double)s->steals;
   s->values[ST_CALLBACK]=frames;
   if(s->enabled && frames>0) {
+    s->values[ST_PRE_LIMITER_PEAK]=synth_stats_db(s->maxPreLimiter);
+    s->values[ST_MAX_REDUCTION]=-synth_stats_db(s->minEverGain);
     double load=seconds*rate/frames; s->peakLoad=fmax(s->peakLoad,load);
     s->values[ST_LOAD]=load; s->values[ST_PEAK_LOAD]=s->peakLoad;
   }

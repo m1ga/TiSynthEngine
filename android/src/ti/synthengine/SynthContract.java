@@ -144,6 +144,55 @@ final class SynthContract {
         return optionalDouble(options, "volume", MIN_VOLUME, MAX_VOLUME);
     }
 
+    static Validation validateVoiceId(Map<String, Object> options) {
+        if (!contains(options, "voiceId")) return Validation.rejected("voiceId", "missing_required", null);
+        Validation result=optionalInteger(options, "voiceId", 1, Integer.MAX_VALUE);
+        if(result.accepted && ((Number)options.get("voiceId")).doubleValue()!=Math.rint(((Number)options.get("voiceId")).doubleValue()))
+            return Validation.rejected("voiceId","not_integer",options.get("voiceId"));
+        return result;
+    }
+
+    private static boolean numberIsZero(Object value){return value instanceof Number&&((Number)value).doubleValue()==0;}
+
+    static Validation validateNoteOn(Map<String, Object> options, double maxFrequencyHz) {
+        Validation result = rejectUnknownOptions(options, "voiceId", "frequency", "note", "attack", "decay", "sustain", "release", "volume",
+                "waveType", "pan", "lfoFreq", "lfoDepth", "noiseRate", "lowPassHz", "pulseWidth", "waveTable", "bitDepth",
+                "filterType", "filterHz", "filterQ", "fmRatio", "fmDepth", "detune", "spatialX", "spatialY", "modulations");
+        if (!result.accepted) return result;
+        result = validateVoiceId(options); if (!result.accepted) return result;
+        Map<String, Object> tone = new java.util.HashMap<>(options);
+        tone.remove("voiceId"); tone.remove("modulations");tone.put("duration", MAX_DURATION_MS);
+        if(contains(options,"modulations"))try {
+            result=optionalDouble(options,"fmRatio",MIN_FM_RATIO,MAX_FM_RATIO);if(!result.accepted)return result;
+            double[] mods=SynthStudioContract.modulations(options.get("modulations"),(int)SynthStudioContract.number(options,"waveType",0,0,5),contains(options,"filterType")&&options.get("filterType") instanceof String?filterTypeIndex((String)options.get("filterType")):0);
+            boolean fm=false;for(int i=0;i<2;i++)if(mods[i*6]!=0&&mods[i*6+2]==2)fm=true;
+            if(fm&&(!contains(options,"fmDepth")||numberIsZero(options.get("fmDepth"))))tone.remove("fmRatio");
+        } catch(IllegalArgumentException|ClassCastException e){return Validation.rejected("modulations","invalid_modulation",options.get("modulations"));}
+        return validateTone(tone, maxFrequencyHz);
+    }
+
+    static Validation validateNoteOff(Map<String, Object> options) {
+        Validation result = rejectUnknownOptions(options, "voiceId");
+        return result.accepted ? validateVoiceId(options) : result;
+    }
+
+    static Validation validateUpdateVoice(Map<String, Object> options, double maxFrequencyHz) {
+        Validation result = rejectUnknownOptions(options, "voiceId", "frequency", "note", "volume", "filterHz", "filterQ",
+                "lfoFreq", "lfoDepth", "pulseWidth", "fmRatio", "fmDepth", "modulations");
+        if (!result.accepted) return result;
+        result = validateVoiceId(options); if (!result.accepted) return result;
+        if (options.size() == 1) return Validation.rejected("changes", "missing_required", null);
+        if (contains(options,"frequency") && contains(options,"note")) return Validation.rejected("frequency","conflicting_pitch_fields",options.get("frequency"));
+        result = optionalDouble(options,"frequency",MIN_FREQUENCY_HZ,maxFrequencyHz); if(!result.accepted) return result;
+        if(contains(options,"note")) {
+            result=validNote(options.get("note"),"note"); if(!result.accepted) return result;
+            if(parseNoteToFrequency((String)options.get("note"))>maxFrequencyHz) return Validation.rejected("note","out_of_range",options.get("note"));
+        }
+        if(contains(options,"modulations"))try {SynthStudioContract.modulations(options.get("modulations"),-1,-1);}
+        catch(IllegalArgumentException e){return Validation.rejected("modulations","invalid_modulation",options.get("modulations"));}
+        return validateVoiceOptions(options,maxFrequencyHz,true);
+    }
+
     static Validation validateTone(Map<String, Object> options, double maxFrequencyHz) {
         Validation result = rejectUnknownOptions(options,
                 "frequency", "note", "duration", "attack", "release", "volume",

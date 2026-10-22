@@ -121,7 +121,7 @@ A single stereo-linked peak limiter sits after master volume. Linking preserves 
 
 Lookahead gives the gain time to reach a safe value before the peak reaches the output. Below the ceiling, the limiter converges back to unity. It catches exceptional sums without normalizing every callback.
 
-Repeated overlapping events can make any limiter audibly raise and lower the bus. A loop that starts a 300 ms chord every 100 ms is therefore a useful load test and a poor tonal reference. Judge the chord with one sustained event; use the overlapping loop only when testing scheduling, stealing and recovery.
+Overlapping events can trigger audible limiting when their sum exceeds the ceiling. Check accumulated reduction measurements before attributing volume dips to this protection.
 
 ## Master volume and pan
 
@@ -141,7 +141,7 @@ Both ports use a 128-slot single-consumer ring buffer. Producers are serialized 
 
 `playChord()` publishes its note data and advances the queue index once. The consumer receives the complete event or nothing. `stopAll` and `shutdown` have a control fallback so cleanup is not lost under queue pressure.
 
-Pattern timing runs outside the audio callback. A platform timer places each step on the command queue. The sequence is suitable for game cues and simple musical patterns, but it is not a sample-accurate composition timeline. The same timer fires `patternend`, about 1 ms after the sum of the step lengths, and the event is handed to the JavaScript runtime asynchronously.
+The playPattern scheduler runs outside the audio callback. A platform timer places each step on the command queue. That API is suitable for game cues and simple musical patterns. For sample-clock composition, use the separate native transport. The same timer fires `patternend`, about 1 ms after the sum of the step lengths, and the event is handed to the JavaScript runtime asynchronously.
 
 ## Shared DSP core
 
@@ -280,3 +280,22 @@ python3 tests/run_stats_java.py
 `tests/stats_engine_host.cpp` uses the Oboe/JDK host flags shown above. It tests native occupancy, reset while playing, saturated queues, binaural drain, shutdown and exact output equality with diagnostics enabled/disabled. This native integration harness requires local Oboe headers; portable shared tests and the stopped-engine Java API tests also run in CI. iOS builds use the same telemetry core, but host Android renders do not execute the iOS audio callback.
 
 `tests/stats_benchmark_host.cpp` extends the spatial replay harness with silence, one/32 voices, replacement pressure, chords, scheduled note publications and short FIR drains in stereo/binaural. Build it twice with identical `-O3` flags: once against the previous engine using `-DSTATS_BASELINE`, and once against the current engine. Run `python3 tools/benchmark_stats.py BASELINE CURRENT` for one warmup and ten alternating trials/configuration, including current snapshots at 5 Hz. The harness verifies identical output hashes across all modes. The [measured comparison and limitations](stats-performance.md) explain what the host percentages establish and which results still require device tests.
+
+## Sustained voices
+
+`noteOn`, `noteOff` and `updateVoice` use the existing bounded native command queue. Voice storage, smoothing ramps and identity snapshots are preallocated. The callback owns envelopes, oscillator/filter state and replacement decisions; it does not allocate or acquire producer locks. `shared/synth_held.h` supplies the same held ADSR, current-level release and independent 10 ms linear parameter ramps to both renderers. Held attack/decay counters stop advancing after those stages, avoiding sample-counter overflow on long notes.
+
+IDs are app-supplied positive 32-bit integers. Atomic 32-bit identity snapshots and queued attacks let producers validate update source compatibility without reading mutable DSP state. The callback checks compatibility again. A full queue rejects note release with `false`; the caller owns its bounded retry and shutdown policy. See the [sustained contract](api.md#noteonoptions) for immutable configuration and supported updates.
+
+Run `tests/held_core_regression.c` with C11 for shared envelope/ramp/identity checks. `tests/held_engine_host.cpp` uses the same build flags as `engine_render_host.cpp`; it covers long notes, release stages, phase-preserving targets, source capabilities, replacement, stale IDs, queue saturation and 32 mixed-source spatial voices. The Java held contract regression and the shared Java/iOS corpus verify the public option shapes. Host rendering and successful builds do not establish device audio quality or touch responsiveness.
+
+
+## Native transport and processing
+
+`shared/synth_sequence.h` advances quarter-note position by compensated sample increments, preserving musical gate positions across tempo changes. A serialized producer prepares sorted traversal and all pitches before publishing one of three immutable banks. The callback accepts tempo at the block boundary and structure at a step boundary; swing changes at a pair boundary. Transport voices share the sustained pool, retain per-slot gate/generation ownership and release independently of the public command queue. See the [public transport contract](api.md#native-sequence-transport).
+
+`shared/synth_effects.h` supplies chorus, ping-pong delay, damped Schroeder reverb and optional saturation; `shared/synth_modulation.h` supplies two phase-preserving LFOs. Buffers allocate at engine initialization and free after the audio backend stops. Epoch tags invalidate histories during panic without walking the delay memory. Effects start disabled and default rendering follows exact bypass. Enabled effects drain on disable, bounded to 30 seconds. No new external DSP dependency is used.
+
+Pre-limiter peak and maximum limiter reduction accumulate natively until reset, so polling cannot miss a brief intervention. The callback tracks linear extrema and converts to decibels once per block. Existing output peak/RMS and reduction windows remain approximately 200 ms. Diagnostics are optional; host measurements do not establish device audio deadlines or listening acceptance.
+
+Portable checks: compile and run `tests/sequence_core_regression.c`, `tests/effects_core_regression.c` and `tests/modulation_core_regression.c` with C11, optimization and libm. The transport test checks ten minutes at five sample rates against calculated event times, plus edits, swing, rests, chords and publication pressure. Effects tests check bypass, tails, panic, automation, memory and stability at 16, 44.1, 48, 96 and 192 kHz. On macOS, `tests/studio_contract_ios.m` validates the new iOS configuration contract without Titanium.

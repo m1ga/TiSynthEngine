@@ -19,7 +19,8 @@ public final class SynthThread extends Thread {
     static final int EXTRA_SPATIAL = 9;
     static final int EXTRA_SPATIAL_X = 10;
     static final int EXTRA_SPATIAL_Y = 11;
-    static final int EXTRA_COUNT = 12;
+    static final int EXTRA_VOICE_ID = 12;
+    static final int EXTRA_COUNT = 25;
 
     private long nativeHandle;
 
@@ -62,6 +63,25 @@ public final class SynthThread extends Thread {
                 attackMs, releaseMs, volume, waveType, pans, noiseRate,
                 lowPassHz, pulseWidth, bitDepth, waveTable, extras);
     }
+
+    public synchronized int voiceMask(int voiceId) { return nativeHandle==0 ? -1 : nativeVoiceMask(nativeHandle,voiceId); }
+    public synchronized boolean voiceCommand(int type,int voiceId,int mask,double[] values) {
+        return nativeHandle==0 || nativeVoiceCommand(nativeHandle,type,voiceId,mask,values);
+    }
+    private static native int nativeVoiceMask(long handle,int voiceId);
+    private static native boolean nativeVoiceCommand(long handle,int type,int voiceId,int mask,double[] values);
+
+    public synchronized boolean masterProcessing(double[] packet) {return nativeHandle!=0 && nativeMasterProcessing(nativeHandle,packet);}
+    private static native boolean nativeMasterProcessing(long handle,double[] packet);
+
+    public synchronized boolean publishSequence(double[] packet,boolean restart) {
+        return nativeHandle!=0 && nativePublishSequence(nativeHandle,packet,restart);
+    }
+    public synchronized void stopSequence() {if(nativeHandle!=0)nativeStopSequence(nativeHandle);}
+    public synchronized double[] sequenceState() {return nativeHandle==0?null:nativeSequenceState(nativeHandle);}
+    private static native boolean nativePublishSequence(long handle,double[] packet,boolean restart);
+    private static native void nativeStopSequence(long handle);
+    private static native double[] nativeSequenceState(long handle);
 
     public synchronized boolean requestStopAll() {
         long handle = nativeHandle;

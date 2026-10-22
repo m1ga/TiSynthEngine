@@ -8,7 +8,7 @@ The module id is `ti.synthengine`. API version `1.0.0` is an unreleased beta for
 
 Use TiSynthEngine for game and interface feedback, retro effects, alarms, notes, chords, arpeggios and simple noise-based percussion. Decay and sustain, a resonant filter, FM and detune also produce plucks, keys, bells and thick pads.
 
-It is a synthesizer, not a sample player. It does not decode `.wav` or `.mp3` files, loop a voice indefinitely, or return handles for individual notes. See [known limits](documentation/recommendations.md#known-limits) before using it for a long-running music or ambience system.
+It is a synthesizer, not a sample player. It does not decode `.wav` or `.mp3` files, play recorded samples or provide MIDI. Sustained voices use app-supplied IDs for release and live updates. See [known limits](documentation/recommendations.md#known-limits) before using it for a long-running music or ambience system.
 
 ## Requirements
 
@@ -95,7 +95,9 @@ Apps that start ads, remote configuration or entry animations may need a longer 
 
 ## Public methods
 
-The module exposes exactly eleven methods and one event, `patternend`.
+Native sample-clock sequencing, stereo chorus/delay/reverb and optional creative saturation are available through capability-detected beta APIs. New processing starts disabled. See the [transport and processing contract](documentation/api.md#native-sequence-transport).
+
+The module exposes nineteen methods and one event, `patternend`.
 
 | Method                  | Returns   | What it does                                                                                             |
 | ----------------------- | --------- | -------------------------------------------------------------------------------------------------------- |
@@ -104,14 +106,22 @@ The module exposes exactly eleven methods and one event, `patternend`.
 | `setStatsEnabled(bool)` | `Boolean` | Enables optional timing and signal measurements (off by default).                                        |
 | `getDefaults()`         | `Object`  | Reports the API version, defaults, limits, profiles and waveform constants.                              |
 | `startEngine(options)`  | `Boolean` | Opens the native stream and fixes its voice capacity and mixing profile.                                 |
+| `noteOn(options)`      | `Boolean` | Starts an identified sustained voice; see [sustained notes](documentation/api.md#noteonoptions). |
+| `noteOff(options)`     | `Boolean` | Begins the identified voice’s release from its current level. |
+| `updateVoice(options)` | `Boolean` | Ramps compatible active-voice parameters over 10 ms without retriggering. |
 | `playTone(options)`     | `Boolean` | Plays one pitch with optional sweep, pan movement and vibrato.                                           |
 | `playChord(options)`    | `Boolean` | Starts 1 to 32 pitches as one atomic event.                                                              |
 | `playPattern(options)`  | `Boolean` | Schedules 1 to 512 structured note or rest steps.                                                        |
+| `playSequence(options)` | `Boolean` | Starts sample-clock sixteenth-note transport with step chords. |
+| `updateSequence(changes)` | `Boolean` | Publishes an atomic transport edit without restarting. |
+| `stopSequence()` | `Boolean` | Stops transport and releases only its voices. |
+| `getSequenceState()` | `Object` | Reports applied step, musical position, tempo and revision. |
+| `setMasterProcessing(options)` | `Boolean` | Configures fixed input gain, stereo effects and optional saturation. |
 | `setVolume(options)`    | `Boolean` | Changes the master level with a short ramp.                                                              |
 | `stopAll()`             | nothing   | Releases all sounding voices through a short fade.                                                       |
 | `shutdown()`            | nothing   | Stops the stream, cancels pending pattern steps and frees resources.                                     |
 
-The six Boolean methods return `true` when accepted. A `false` result means the payload was rejected, the engine is not running, the stream could not open, or the command queue was full.
+The thirteen Boolean methods return `true` when accepted. A `false` result means the payload was rejected, the engine is not running, the stream could not open, or the command queue was full.
 
 ## Strict options
 

@@ -2,7 +2,7 @@
 
 TiSynthEngine 1.0.0 is a native tone synthesizer for Titanium on Android and iOS. It plays generated tones, chords, noise and timed patterns through the same JavaScript contract on both platforms.
 
-Start with the [README](../README.md) if you have not installed the module yet. It explains the lifecycle, the eleven public methods, the `patternend` event and common options.
+Start with the [README](../README.md) if you have not installed the module yet. It explains the lifecycle, the fourteen public methods, the `patternend` event and common options.
 
 ## Guides
 
