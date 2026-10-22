@@ -164,6 +164,8 @@ Sustained voices apply a minimum 3 ms attack and release edge to prevent a hard 
 
 The app supplies IDs and should never reuse one during its session. Reusing an active ID explicitly replaces that attack, snapshots a 6 ms fade tail and uses at least 6 ms attack for the replacement. With a full pool, release voices are replaced first, then the oldest attack. Timed-only events retain their existing replacement policy and sound. A former ID cannot control its replacement.
 
+Repeating a public sustained note can inherit the oscillator phase and pre-envelope filter history of the newest compatible note still releasing at the same pitch. This prevents a fresh phase reset from cancelling its release tail. Each note keeps its own ID, envelope, gain and release. Compatibility requires stable matching oscillator, vibrato and filter settings; changing parameters or the two optional LFOs retain independent starts. Simultaneously held unisons, native transport notes and timed calls retain their existing phase policy.
+
 ## `noteOff(options)`
 
 | Field | Rule |

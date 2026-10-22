@@ -121,7 +121,7 @@ A single stereo-linked peak limiter sits after master volume. Linking preserves 
 
 Lookahead gives the gain time to reach a safe value before the peak reaches the output. Below the ceiling, the limiter converges back to unity. It catches exceptional sums without normalizing every callback.
 
-Overlapping events can trigger audible limiting when their sum exceeds the ceiling. Check accumulated reduction measurements before attributing volume dips to this protection.
+Overlapping events can trigger audible limiting when their sum exceeds the ceiling. Check the accumulated reduction measurement before attributing a volume dip to this protection: repeated same-pitch oscillators can also cancel one another even below the ceiling. Compatible public sustained-note repetitions preserve the phase of a releasing predecessor while retaining separate envelopes and tails. Timed calls, transport notes and simultaneous held unisons keep their existing phase policy.
 
 ## Master volume and pan
 

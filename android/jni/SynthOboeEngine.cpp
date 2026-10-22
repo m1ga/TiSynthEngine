@@ -14,6 +14,7 @@
 
 #include "../../shared/synth_core.h"
 #include "../../shared/synth_held.h"
+#include "../../shared/synth_retrigger.h"
 #include "../../shared/synth_spatial.h"
 #include "../../shared/synth_stats.h"
 #include "../../shared/synth_sequence.h"
@@ -528,6 +529,28 @@ private:
   }
 
   Voice *startVoice(const Command &command) {
+    // Capture before slot selection/clearing: the donor can be the victim.
+    bool inherit=false; uint64_t donorOrder=0;
+    double inheritedPhase=0,inheritedFM=0,inheritedLFO=0,inheritedFilterState=0;
+    SynthFilter inheritedFilter{};
+    if(command.type==SYNTH_CMD_HELD_ON && command.voiceId>0 &&
+       !command.modulations.lfo[0].enabled && !command.modulations.lfo[1].enabled &&
+       command.frequencyEnd<1 && command.pulseWidthEnd<.05 &&
+       command.filterHzEnd<SYNTH_FILTER_MIN_HZ && !command.fmDepthSweep && !command.stepCount) {
+      double values[SYNTH_LIVE_COUNT]={command.frequency,command.volume,command.filterHz,command.filterQ,command.lfoFreq,command.lfoDepth,command.pulseWidth,command.fmRatio,command.fmDepth};
+      double cutoff=clampValue(command.lowPassHz,0.0,renderSampleRate_*.45);
+      SynthRetriggerKey next={command.waveType,command.filterType,command.bitDepth,command.wavetableSize,cutoff>0?1-std::exp(-2*kPi*cutoff/renderSampleRate_):0,values,command.wavetable.data()};
+      for(const Voice &v:voices_) {
+        if(!v.active || v.held.voiceId<=0 || !v.held.releasing || v.held.releasePlayed>=v.release ||
+           v.played>=v.duration || v.sequenceOwned || v.incrementDelta || v.pulseWidthDelta ||
+           v.fmDepthDelta || v.filterHzEnd>0 || v.stepCount || synth_modulation_is_active(&v.modulation))continue;
+        SynthRetriggerKey old={v.waveType,v.filter.type,v.bitDepth,v.wavetableSize,v.filterAlpha,v.live.value,v.wavetable.data()};
+        if(v.held.order>donorOrder && synth_retrigger_compatible(&v.live,&old,&next)) {
+          inherit=true;donorOrder=v.held.order;inheritedPhase=v.phase;inheritedFM=v.modPhase;
+          inheritedLFO=v.lfoPhase;inheritedFilterState=v.filterState;inheritedFilter=v.filter;
+        }
+      }
+    }
     Voice *voice = nullptr;
     bool heldPool=command.type==SYNTH_CMD_HELD_ON;
     for(Voice &v:voices_) if(v.active && v.held.voiceId) heldPool=true;
@@ -658,6 +681,7 @@ private:
     voice->heldNoise = static_cast<int32_t>(voice->noise >> 32) / 2147483648.0;
     synth_modulation_set_config(&voice->modulation,&command.modulations,modulationCapabilities(*voice));
     voice->modulating=synth_modulation_is_active(&voice->modulation)!=0;
+    if(inherit) {voice->phase=inheritedPhase;voice->modPhase=inheritedFM;voice->lfoPhase=inheritedLFO;voice->filterState=inheritedFilterState;voice->filter=inheritedFilter;}
     return voice;
   }
 

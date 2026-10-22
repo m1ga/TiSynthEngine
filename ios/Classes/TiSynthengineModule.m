@@ -12,6 +12,7 @@
 #import <stdint.h>
 #include "../../shared/synth_core.h"
 #include "../../shared/synth_held.h"
+#include "../../shared/synth_retrigger.h"
 #include "../../shared/synth_modulation.h"
 #include "../../shared/synth_spatial.h"
 #include "../../shared/synth_stats.h"
@@ -1011,6 +1012,29 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
 
 - (void)startVoiceFromCommand:(const SynthCommand *)cmd
 {
+  // Capture before slot reuse; only public, stable held-key release tails donate.
+  BOOL inherit=NO; uint64_t donorOrder=0;
+  double inheritedPhase=0,inheritedFM=0,inheritedLFO=0,inheritedFilterState=0;
+  SynthFilter inheritedFilter={0};
+  if(cmd->voiceId>0 && !cmd->sequenceGeneration &&
+     (!cmd->hasModulations || (!cmd->modulation.lfo[0].enabled && !cmd->modulation.lfo[1].enabled)) &&
+     cmd->frequencyEnd<MIN_FREQUENCY_HZ && cmd->pulseWidthEnd<.05 &&
+     cmd->filterHzEnd<SYNTH_FILTER_MIN_HZ && !cmd->hasFmDepthEnd && !cmd->seqStepCount) {
+    double values[SYNTH_LIVE_COUNT]={cmd->frequency,cmd->volume,cmd->filterHz,cmd->filterQ,cmd->lfoFreq,cmd->lfoDepth,cmd->pulseWidth,cmd->fmRatio,cmd->fmDepth};
+    double cutoff=ClampDouble(cmd->lowPassHz,0,engineSampleRate*.45);
+    SynthRetriggerKey next={cmd->waveType,cmd->filterType,cmd->bitDepth,cmd->wavetableSize,cutoff>0?1-exp(-2*M_PI*cutoff/engineSampleRate):0,values,cmd->wavetable};
+    for(int i=0;i<engineMaxVoices;i++) {
+      const SynthVoice *d=&voices[i];
+      if(!d->isActive || d->held.voiceId<=0 || !d->held.releasing || d->held.releasePlayed>=d->releaseSamples ||
+         d->samplesPlayed>=d->totalSamples || d->sequenceGeneration || d->phaseIncrDelta || d->pulseWidthDelta ||
+         d->fmDepthDelta || d->svfSweeping || d->seqStepCount || synth_modulation_is_active(&d->modulation))continue;
+      SynthRetriggerKey old={d->waveType,d->svf.type,d->bitDepth,d->wavetableSize,d->filterAlpha,d->live.value,d->wavetable};
+      if(d->held.order>donorOrder && synth_retrigger_compatible(&d->live,&old,&next)) {
+        inherit=YES;donorOrder=d->held.order;inheritedPhase=d->phase;inheritedFM=d->fmModPhase;
+        inheritedLFO=d->lfoPhase;inheritedFilterState=d->filterState;inheritedFilter=d->svf;
+      }
+    }
+  }
   int slot    = [self findVoiceSlotForCommand:cmd];
   SynthVoice *v = &voices[slot];
   BOOL replacing=v->isActive;
@@ -1157,6 +1181,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   // Noise seed
   v->noiseState = (uint64_t)(mach_absolute_time()) ^ ((uint64_t)(slot + 1) * 0x9e3779b97f4a7c15ULL);
   v->heldNoise = LcgNoise(&v->noiseState);
+  if(inherit) {v->phase=inheritedPhase;v->fmModPhase=inheritedFM;v->lfoPhase=inheritedLFO;v->filterState=inheritedFilterState;v->svf=inheritedFilter;}
 }
 
 // ---------------------------------------------------------------------------

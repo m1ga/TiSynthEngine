@@ -52,5 +52,6 @@ Beta for the planned first public release.
 
 ### Fixed
 
+- Preserve compatible released-key oscillator phases and pre-envelope filter history so repeated sustained notes do not cancel their tails; independent envelopes, gains and IDs remain unchanged.
 - Protect sustained attack and release edges shorter than 3 ms from hard gating on Android and iOS. Longer envelopes and existing timed envelopes retain their behavior.
 - Make the Android native limiter reach its target within the lookahead deadline, matching iOS and the Java DSP reference. Dense sums now respect the configured ceiling instead of escaping into hard clipping; drained-window gain resets without changing below-ceiling source gain.
