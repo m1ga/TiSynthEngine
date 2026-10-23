@@ -15,12 +15,12 @@ The Classic Titanium app in [app.js](app.js) demonstrates the timed sounds, nati
 </modules>
 ```
 
-4. Copy [app.js](app.js) to the test app's `Resources/app.js`. It needs no images, audio files or other JavaScript files.
+4. Copy the entire `example/` folder into the test app's `Resources/`, including [app.js](app.js), [sequenceScore.js](lib/sequenceScore.js) and [sequenceOwner.js](lib/sequenceOwner.js). It needs no images or audio files.
 5. Build and run the test app with the Titanium CLI or your existing Titanium launch configuration. Use Titanium SDK 13.2.0.GA or newer, Android compile API 35 or newer, and iOS 15 or newer. See the [module installation guide](../documentation/guide.md#install-the-module).
 
 The example checks the installed API version, spatial limits and all three statistics methods before constructing the screen. If it requests current packages, replace the native module, then rebuild and reinstall the app; copying module files alone does not update an app already on a device.
 
-Audio starts after the first layout settles. Sound controls report native rejections. If startup fails, the session buttons remain available to retry. Closing the window removes its pattern listener, clears startup/statistics timers, disables diagnostics and shuts down the engine. The example plays finite sounds in the foreground and does not demonstrate background audio. Turn diagnostics off before leaving it in the background.
+Audio starts after the first layout settles. Sound controls report native rejections. If startup fails, the session buttons remain available to retry. Closing the window removes its sequence listener, clears startup/statistics timers, disables diagnostics and shuts down the engine. The example plays finite sounds in the foreground and does not demonstrate background audio. Turn diagnostics off before leaving it in the background.
 
 ## Synthesis and sequencing
 
@@ -62,7 +62,7 @@ Completion marks the final scheduled step; releases and shared effect tails can 
 - TOGGLE DIAGNOSTICS enables callback timing and signal meters, refreshing at 5 Hz. Toggle it off to stop the timer and optional measurements; basic counters remain available.
 - RESET STATS clears accumulated statistics without stopping voices, cancelling queued work or changing the diagnostic switch. The next callback applies render-owned resets.
 
-The panel shows active/peak/spatial/tail voices, pending commands, replacements, rejections, dropped pattern steps, callback load, stereo output peak and backend underruns. It displays `n/a` for unmeasured or unavailable values, keeping them distinct from zero. Signal windows need about 200 ms of output after enabling. Native snapshots also include RMS, limiter reduction, sample rate, buffer and latency fields; consult the [complete field reference](../documentation/api.md#getstats) when integrating a full diagnostic view.
+The panel shows active/peak/spatial/tail voices, pending commands, replacements, request/publication rejections, priority drops, callback load, stereo output peak and backend underruns. It displays `n/a` for unmeasured or unavailable values, keeping them distinct from zero. Signal windows need about 200 ms of output after enabling. Native snapshots also include RMS, limiter reduction, sample rate, buffer and latency fields; consult the [complete field reference](../documentation/api.md#getstats) when integrating a full diagnostic view.
 
 Render load divides callback elapsed time by the audio budget for that block; it does not measure total app CPU. The panel multiplies the native fraction by 100, so a reading of 1.20% means that fraction of the block budget, not 120%.
 

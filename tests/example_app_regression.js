@@ -41,7 +41,7 @@ function playground() {
   synth.resetStats = () => calls.push({ method: 'resetStats' })
   synth.getStats = () => { calls.push({ method: 'getStats' }); return {
     activeVoices: 0, maxVoices: 16, peakActiveVoices: 3, spatialVoices: 0, tailVoices: 0,
-    pendingCommands: 0, voiceStealCount: 0, rejectedRequestCount: 0, droppedPatternStepCount: 0,
+    pendingCommands: 0, voiceStealCount: 0, rejectedRequestCount: 0, rejectedPublicationCount: 7, priorityDropCount: 4,
     renderLoad: null, outputPeakDbFS: null, underrunCount: null
   } }
   const app = widget()
@@ -110,6 +110,8 @@ test('diagnostic polling is opt-in, preserves null and cleans up the owner', () 
   p.click('READ STATS')
   assert(!p.calls.some(c => c.method === 'resetStats'))
   assert.match(p.text(), /n\/a/)
+  assert.match(p.text(), /Publications rejected: 7 \| priority drops: 4/)
+  assert.doesNotMatch(p.text(), /undefined|dropped steps/)
   p.click('TOGGLE DIAGNOSTICS'); p.click('TOGGLE DIAGNOSTICS'); p.click('TOGGLE DIAGNOSTICS')
   assert.equal(p.intervals.size, 1)
   p.click('RESET STATS')

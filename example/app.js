@@ -1007,7 +1007,8 @@ function refreshStats() {
   statsLabel.text = 'Diagnostics: ' + (diagnosticsEnabled ? 'on' : 'off')
     + '\nVoices: ' + stats.activeVoices + '/' + stats.maxVoices + ' (peak ' + stats.peakActiveVoices + ')'
     + '\nSpatial: ' + stats.spatialVoices + ' | tails: ' + stats.tailVoices + ' | queued: ' + stats.pendingCommands
-    + '\nReplaced: ' + stats.voiceStealCount + ' | rejected: ' + stats.rejectedRequestCount + ' | dropped steps: ' + stats.droppedPatternStepCount
+    + '\nReplaced: ' + stats.voiceStealCount + ' | requests rejected: ' + stats.rejectedRequestCount
+    + '\nPublications rejected: ' + stats.rejectedPublicationCount + ' | priority drops: ' + stats.priorityDropCount
     + '\nRender load: ' + (stats.renderLoad == null ? 'n/a' : measured(stats.renderLoad * 100, '%'))
     + '\nPeak L/R: ' + measured(stats.outputPeakDbFS && stats.outputPeakDbFS.left) + '/' + measured(stats.outputPeakDbFS && stats.outputPeakDbFS.right) + ' dBFS'
     + '\nBackend underruns: ' + measured(stats.underrunCount)
