@@ -1,6 +1,6 @@
 # TiSynthEngine
 
-TiSynthEngine is a native synthesizer for Titanium apps on Android and iOS. It generates tones, chords, sweeps, noise and timed patterns without bundled audio files. Optional `spatialX` and `spatialY` provide headphone positioning on a front plane; see [binaural positioning](documentation/api.md#binaural-front-plane-positioning) and [app integration](documentation/guide.md#integrate-binaural-in-a-2d-app).
+TiSynthEngine is a native synthesizer for Titanium apps on Android and iOS. It generates tones, sustained voices, chords, sweeps, noise and sample-clock sequences without bundled audio files. Optional native chorus, ping-pong delay, reverb, creative saturation and two voice LFOs add movement and space. Optional `spatialX` and `spatialY` provide headphone positioning on a front plane; see [binaural positioning](documentation/api.md#binaural-front-plane-positioning) and [app integration](documentation/guide.md#integrate-binaural-in-a-2d-app).
 
 The module id is `ti.synthengine`. API version `1.0.0` is an unreleased beta for the first public release.
 
@@ -59,7 +59,7 @@ synth.playTone({ note: 'A4' })
 
 This game-oriented example uses `ambient`: on iOS it respects silent mode and mixes with other apps. The module default is `playback`, which ignores silent mode. Android validates this option without changing its output. Changing the session policy requires `shutdown()` followed by `startEngine()`.
 
-Call `shutdown()` when the screen or app that owns the audio closes. To try every public method, follow the [interactive example setup and test checklist](example/README.md).
+Call `shutdown()` when the screen or app that owns the audio closes. For timed sounds, follow the [interactive example setup and test checklist](example/README.md). The [copyable advanced examples](documentation/examples.md#sustained-game-motor) cover held voices, sample-clock transport, effects and modulation.
 
 ## Start after layout
 
@@ -122,6 +122,38 @@ The module exposes nineteen methods and one event, `patternend`.
 | `shutdown()`            | nothing   | Stops the stream, cancels pending pattern steps and frees resources.                                     |
 
 The thirteen Boolean methods return `true` when accepted. A `false` result means the payload was rejected, the engine is not running, the stream could not open, or the command queue was full.
+
+## Sustained voices, musical transport and effects
+
+| Feature | What you can build | Start here |
+| --- | --- | --- |
+| `noteOn`, `noteOff`, `updateVoice` | Playable keys, a held game motor, drones and final fanfare chords; compatible live controls ramp over 10 ms. | [Held voice ownership](documentation/guide.md#hold-and-edit-a-voice) |
+| `playSequence`, `updateSequence`, `stopSequence`, `getSequenceState` | Native sixteenth-note timing, step chords, rests, gates, swing and arpeggios, up to 512 steps. | [Musical transport](documentation/guide.md#choose-the-musical-transport) |
+| `setMasterProcessing` | Stereo chorus, free/synced ping-pong delay and damped stereo reverb; optional creative saturation. | [Master effects](documentation/guide.md#add-master-effects) |
+| `modulations` on held/sequence voices | Up to two sine/triangle LFOs for filter cutoff, square PWM or sine FM, with free or tempo-synced rates. | [LFO example](documentation/examples.md#two-voice-lfos) |
+| Accumulated signal diagnostics | See brief pre-limiter peaks and limiter attenuation that happened between UI polls. | [Measure the mix](documentation/examples.md#measure-peaks-and-limiter-reduction) |
+
+Beta packages retain `apiVersion: '1.0.0'`: detect the methods you need and rebuild the app with matching Android/iOS packages. The [guide](documentation/guide.md#detect-optional-beta-capabilities) shows feature detection. Timed playback remains available through its existing methods.
+
+The initial module state is `inputGain: 1`, all four master processors disabled and no additional voice LFOs. Turning an effect on is explicit; these features are available to every Titanium consumer, including games. Master effects process the entire mix, with no per-voice send or separate music/effects bus. Turning them off drains their tails; `stopAll()` performs panic and clears effect histories. Saturation changes timbre and remains separate from final limiter protection.
+
+```javascript
+if (typeof synth.playSequence !== 'function' ||
+    typeof synth.setMasterProcessing !== 'function') {
+  throw new Error('Install current TiSynthEngine beta packages and rebuild')
+}
+if (!synth.setMasterProcessing({ reverb: { enabled: true, decay: 1.1, mix: 0.12 } })) {
+  throw new Error('Reverb configuration rejected')
+}
+if (!synth.playSequence({ bpm: 110, loop: false,
+  voice: { waveType: contract.waveTypes.TRIANGLE, volume: 0.3, release: 180 },
+  steps: [{ notes: [60] }, { notes: [64] }, { notes: [67] }, { notes: [60, 64, 67] }] })) {
+  synth.shutdown()
+  throw new Error('Sequence publication rejected')
+}
+```
+
+The engine owns each note start and release; JavaScript need not trigger the steps. A sequence step uses MIDI numbers, while `playTone`, `playChord` and `noteOn` accept note-name strings. `true` means accepted publication, not that the audio callback already applied it. See the [API](documentation/api.md#native-sequence-transport) for edits, cancellation and state polling, and [technical validation limits](documentation/audio-engine.md#native-transport-and-processing) before sizing a realtime workload.
 
 ## Strict options
 
@@ -331,7 +363,7 @@ The command is atomic. The render thread sees the complete chord or none of it, 
 
 Separate `playTone` calls are independent events. They are appropriate for unrelated touches or collisions, but several of them can produce a hotter sum than the same notes in one chord.
 
-`maxVoices` sets voice capacity without changing volume. When the pool is full, the engine steals the voice with the least time remaining and gives it a short tail.
+`maxVoices` sets voice capacity without changing volume. Timed-only pools replace the voice with the least time remaining. Sustained/transport replacement prefers releasing voices, then the oldest attack; every replacement has a short fade tail. There are no reserved voices or priority lanes.
 
 ## Patterns
 
@@ -359,7 +391,7 @@ Step length uses step `duration`, step `noteValue`, pattern `noteValue`, pattern
 
 Only one pattern can be pending. Starting a new pattern cancels the future steps of the old one. `stopAll()` releases the notes already sounding but does not cancel future steps. Start a one-step rest or call `shutdown()` to cancel them.
 
-An accepted pattern reports `patternend` unless `shutdown()` cancels it first. `completed` is `true` at the natural end and `false` when a newer pattern replaces it. Calling `stopAll()` leaves future steps scheduled and emits no event; `shutdown()` cancels them without an event. Sound may remain after the scheduler finishes. Remove the listener when the owner closes:
+An accepted pattern reports `patternend` unless `shutdown()` cancels it first. `completed` is `true` at the natural end and `false` when a newer pattern or native sequence replaces it. Calling `stopAll()` leaves future steps scheduled and emits no event; `shutdown()` cancels them without an event. Sound may remain after the scheduler finishes. Remove the listener when the owner closes:
 
 ```javascript
 function onPatternEnd (event) {

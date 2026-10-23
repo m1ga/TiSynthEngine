@@ -138,7 +138,7 @@ The event fires once per accepted `playPattern`, unless shutdown discards the pe
 1. The call returned `true`. A rejected pattern produces no event.
 2. The listener is on the module (`synth.addEventListener`), registered before the pattern started and not removed by a cleanup that already ran.
 3. `shutdown()` was not called first. It discards a pending pattern silently.
-4. The pattern was not replaced. A newer accepted pattern delivers `completed: false` for the old one instead of a natural end.
+4. The pattern was not replaced. A newer accepted pattern or native sequence delivers `completed: false` for the old one instead of a natural end.
 
 The event arrives when the pattern ends, about 1 ms after the sum of its step lengths, not when you call. A 30 second pattern reports after 30 seconds. Swing and FIR draining can leave sound after completion; the event does not certify audible silence. The [interactive example](../example/README.md#pattern-completion-and-replacement) demonstrates completion, replacement and shutdown.
 
@@ -186,3 +186,37 @@ If later sounds remain silent, capture the Android or Xcode log around the route
 ## What to include in a bug report
 
 Include the platform, OS version, device model, Titanium SDK version, module version, mixing profile, `maxVoices`, the smallest accepted call that reproduces the problem, and the native log around startup and playback. For a sound-quality report, say whether it reproduces through the built-in speaker, wired headphones, Bluetooth or all routes.
+
+## Held notes, sequences or effects methods are missing
+
+The beta remains API version 1.0.0. Detect `noteOn`/`noteOff`/`updateVoice`, all four sequence methods and `setMasterProcessing` according to the feature needed. Install matching current Android/iOS packages, rebuild and reinstall the consumer app. Existing binary packages can share the same version without the same methods or accepted fields. See [capability detection](guide.md#detect-optional-beta-capabilities).
+
+## A held voice does not release or update
+
+Use the original positive `voiceId`, not the pitch or an ID that has already been reused. `noteOn` does not accept `duration` or temporal `*End` fields. `updateVoice` cannot change source, filter type, table, noise clock, ADSR or spatial position; restart with a new ID when those attack-time settings must change. Compatible continuous edits ramp for 10 ms.
+
+Check Boolean returns. A full public queue can reject `noteOff`; retry twice at 16 ms outside render, then shut down/report if still rejected. Cancel those retries on owner teardown. The [held motor example](examples.md#sustained-game-motor) implements this policy. Touch cancellation, pause and close need cleanup as well as normal key up.
+
+An ended or stolen ID accepts updates as a no-op, so acceptance does not prove audible continuity. Held voices share capacity with timed sounds and transport voices. Check replacement counts under dense collision load, leave headroom in the pool and use an app-owned renewal policy if needed. Increasing capacity above 32 or enabling reverb does not reserve a voice.
+
+## A native sequence edit seems delayed or does not resume
+
+`true` acknowledges publication before the audio callback applies it. Compare `getSequenceState().revision` with the last state you observed; UI polling is presentation, not note timing. BPM applies at the next audio block, structural changes at the next step and swing at the next pair. A whole edit can reject when no preallocated bank/publication slot is free. Retain the last accepted configuration and retry later outside the callback.
+
+`updateSequence` does not start a stopped transport. Use `playSequence` to restart at the beginning of the traversal. Each step must use integer MIDI `notes` or `rest: true`, not pattern note strings or a `duration`. The grid is fixed to sixteenths, and native gate/release scheduling does not require JS timers. For source/filter changes, clear incompatible inherited `modulations` explicitly. See the [native transport contract](api.md#native-sequence-transport).
+
+`playPattern` and `playSequence` cancel each other's future events. Native transport completion/stop has no `patternend`; only a replaced timer pattern reports `completed: false`. `stopSequence` targets only transport voices, while panic and shutdown have wider scope.
+
+## Effects are silent, remain audible when disabled or affect other sounds
+
+Master processing requires a running stream and an accepted `setMasterProcessing` call. Effects start disabled; a low mix can be subtle. Additional voice LFOs are also optional and require the correct source/filter target. There are no new effect fields on `playTone`, `playChord` or `playPattern`; use the master method, or the new `modulations` array on held/sequence voices.
+
+The master bus processes every simultaneous sound, including dry-looking playback calls. There are no per-voice sends or separate category buses. Delay and LFO sync use the native sequence BPM, initially 120, not the timer-pattern tempo. Use `sync: 'off'` for a free delay time or free LFO rate. Keep source, input and master gains in mind before blaming an effect for a level change.
+
+Disabling chorus/delay/reverb closes their input gradually and drains existing tails for at most 30 seconds, then bypasses exactly. It does not restore a changed `inputGain`. Panic via `stopAll` invalidates histories and stops native transport, while future timer-pattern events can still play. Owner `shutdown` cancels both scheduling paths and closes audio. Saturation remains an optional creative timbre change; it is not the limiter.
+
+## A brief level dip is gone before the meter refreshes
+
+Enable diagnostics, reset deliberately, then inspect `preLimiterPeakDb` and `maxLimiterReductionDb`. They retain the native pre-limiter peak and greatest attenuation since reset, including brief interventions between UI polls. `limiterReductionDb` is a window measurement and can return to zero sooner. Older packages may omit the accumulated fields; disabled/unmeasured diagnostics return `null`. See [measurement example](examples.md#measure-peaks-and-limiter-reduction).
+
+If accumulated attenuation remains near zero, investigate phase cancellation between repeated same-pitch oscillators, changing filters or the device speaker/protection path. Compatible released public held-note repetitions preserve predecessor phase; simultaneous unisons, timed calls and transport notes retain their existing phase behavior. Extra effects and resonance can consume headroom even when source gain is fixed. Compare matched levels through headphones and the physical speaker before changing the mix globally.

@@ -2,6 +2,8 @@
 
 This folder contains the Android implementation of `ti.synthengine` 1.0.0. The public API is documented in the root [README](../README.md) and the [API reference](../documentation/api.md).
 
+The current beta exposes the same nineteen methods on both platforms. Effects and extra LFOs are opt-in; input gain starts at unity. See [new-feature integration](../documentation/guide.md#detect-optional-beta-capabilities) and [copyable examples](../documentation/examples.md#sustained-game-motor). The version remains 1.0.0; rebuild consumer apps with current packages rather than relying on the version string.
+
 ## Runtime
 
 The renderer runs in C++ through Oboe's floating-point audio callback. It requests low-latency mode and exclusive sharing when the device supports them, then falls back to a compatible stream when needed. Output-route errors reopen the stream and refresh its sample rate.
@@ -11,6 +13,10 @@ The native engine provides:
 - 1 to 32 voices with short steal and stop tails;
 - sine, PolyBLEP square, PolyBLEP sawtooth, triangle, noise and custom wavetable sources;
 - variable-rate sample-and-hold noise, per-voice low-pass filtering, variable pulse width and optional amplitude quantization;
+- identified sustained voices, selective release and compatible 10 ms live edits;
+- sample-clock sixteenth-note transport, step chords/gates, swing and arpeggios;
+- optional shared stereo chorus, ping-pong delay, Schroeder reverb and creative saturation;
+- two phase-preserving voice LFOs for cutoff/PWM/FM with free or native-tempo sync;
 - fixed event gain and atomic chord publication;
 - a lock-free audio-thread consumer for the native command queue;
 - smoothed master volume and a stereo-linked lookahead limiter;
@@ -28,6 +34,7 @@ Run from this directory:
 test_dir=$(mktemp -d /tmp/ti-synth-test.XXXXXX)
 javac -d "$test_dir" \
   src/ti/synthengine/SynthContract.java \
+  src/ti/synthengine/SynthStudioContract.java \
   test/ti/synthengine/SynthContractRegression.java \
   src/ti/synthengine/SynthDsp.java \
   test/ti/synthengine/SynthDspRegression.java

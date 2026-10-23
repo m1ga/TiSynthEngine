@@ -1,5 +1,7 @@
 # Statistics host comparison
 
+This is a historical statistics-only comparison, before sustained voices, native sequence transport, master effects and the two additional voice LFOs. It is not a performance measurement of those features. See [current technical validation](studio-validation.json) for newer evidence and its device/deadline limits.
+
 Beta 1.0.0. Synthetic Android native render on Apple M1. Apple clang version 21.0.0 (clang-2100.3.34.2). Baseline commit `95901c98af5353b86d9dc7c60b29ab9186b038cd`. Both renderers use identical `-O3` flags.
 
 One warmup and ten alternating runs per configuration, 48 kHz, 32 slots, 256-frame callbacks, twenty seconds per run. Current modes query native snapshots at 5 Hz. Timing includes command publication and snapshot work; JavaScript/JNI, real scheduler jitter and hardware streams are excluded. macOS user-interactive QoS reduces core-selection variability. Values below are median percentage changes relative to the previous engine.

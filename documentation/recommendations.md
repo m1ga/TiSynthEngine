@@ -32,7 +32,7 @@ If a phone buzzes under `speakerSafe`, lower the event volume or raise the pitch
 | Chords, keys or long release tails |       16 to 24 |
 | Explicit stress testing            |             32 |
 
-Count release tails along with buttons pressed at the same instant. A new voice steals the slot with the least time remaining when the pool is full. The short fade avoids a hard click; the stolen note still ends early.
+Count release tails along with buttons pressed at the same instant. Timed-only events steal the slot with the least time remaining; sustained/transport voices prefer a releasing slot, then the oldest attack. The short fade avoids a hard click; the stolen note still ends early.
 
 ## Keep one lifecycle owner
 
@@ -112,14 +112,24 @@ Use the [integration guide](guide.md#integrate-binaural-in-a-2d-app) to convert 
 - Use `noteOn` with app-supplied IDs for individual release and compatible live updates. Detect the methods in beta binaries; timed events do not return voice handles.
 - Timed tones, chords and pattern steps last at most 60 seconds. Sustained `noteOn` voices last until release, replacement or shutdown.
 - The module synthesizes waveforms and does not play audio files.
-- Only one pattern scheduler is pending at a time.
+- One native sequence transport and one timer-based pattern API are available; starting either cancels future events of the other. There are no independent music tracks.
 - There is no completion event for a single note or chord. Patterns report their end through `patternend`, which is the only event the module emits.
 - Voice capacity and mixing profile remain fixed until shutdown.
-- Pattern scheduling is timer-based, not sample-accurate.
+- `playPattern` scheduling is timer-based. `playSequence` is sample-clock driven on a sixteenth-note grid, without arbitrary millisecond step lengths or ties.
 - `lowPassHz` is a plain one-pole filter. The resonant filter has fixed 12 dB per octave and one exponential sweep; there is no filter envelope.
 - FM has one modulator and works only on `SINE`.
 - Binaural positions are fixed per event on a front plane; there is no per-voice movement, rear positioning, distance attenuation or head tracking. Output is two channels, without a multichannel 2.1/5.1 routing API.
-- There is no effects bus: no reverb, delay or chorus.
+- Chorus, delay, reverb and optional saturation process one shared stereo master bus. There are no per-voice sends or separate category buses.
 - The module provides generic synthesis primitives and does not emulate hardware cycle by cycle.
 
-Use a sample player or a dedicated music engine when a product needs streaming, sample loop points or a sample-accurate composition timeline.
+Use a sample player or a dedicated music engine when a product needs streaming, sample loop points, audio-file decoding or multiple independent composition tracks. Use the native sequence transport for the supported musical grid.
+
+## Use effects and held voices deliberately
+
+Use `noteOn` for a sound whose duration follows interaction, such as a key, motor or beam; release its ID on touch end, cancellation, pause or scene teardown. Use `playSequence` for a finite musical cue or repeating grid. Neither needs JavaScript to keep an already accepted note alive. Both share the same 32-slot maximum with collision and interface tones; held notes can be stolen, and an accepted `updateVoice` on a stolen ID is a no-op. There is no voice-finished event or priority reservation.
+
+Keep chorus/delay/reverb mixes modest when dialogue or short game feedback must remain distinct. They process the whole mix, so enabling reverb for a victory chord also affects simultaneous shots and collisions. Use an isolated presentation context, or close effect input before returning to gameplay. Disabling effects lets tails drain for at most 30 seconds; use panic when immediate history invalidation is required. Start with saturation disabled and compare creative drive at matched levels. Do not use saturation as an automatic substitute for the final limiter.
+
+Fixed input/event gain does not decrease when unrelated voices start. If level dips, inspect `maxLimiterReductionDb` and `preLimiterPeakDb`, then consider same-pitch phase cancellation or the device's speaker protection. Eight coherent independent voices can still exceed the limiter threshold; module capacity is not a clean-mix loudness guarantee. See [measurement example](examples.md#measure-peaks-and-limiter-reduction).
+
+Measure the complete workload on each target device, including held voices, binaural, LFOs, all enabled effects and tails. The [historical statistics benchmark](stats-performance.md) predates these features; the [current technical report](studio-validation.json) includes an unmet full-chain host deadline criterion. Neither is a guarantee of game-frame rate, physical audio deadlines, heat or battery life.

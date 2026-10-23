@@ -8,7 +8,7 @@ Android and iOS expose the same nineteen methods, one event, defaults, limits, w
 
 ## Return values
 
-`startEngine`, `playTone`, `playChord`, `playPattern`, `noteOn`, `noteOff`, `updateVoice` and `setVolume` return a Boolean. `true` means the request was accepted. `false` means validation failed, the engine was unavailable, or the native command queue was full.
+`startEngine`, `playTone`, `playChord`, `playPattern`, `noteOn`, `noteOff`, `updateVoice`, `setVolume`, `playSequence`, `updateSequence`, `stopSequence` and `setMasterProcessing` return a Boolean. `true` means the request was accepted. `false` means validation failed, the engine was unavailable, or the native command queue was full.
 
 `setStatsEnabled` also returns Boolean acceptance. `stopAll`, `resetStats` and `shutdown` do not return a value. `getDefaults` returns the contract object described below. `getStats` returns a new statistics snapshot.
 
@@ -251,7 +251,7 @@ The controls from `decay` to `detune` are described in [Expressive controls](#ex
 
 Detect `playSequence`, `updateSequence`, `stopSequence` and `getSequenceState` by method presence; beta `apiVersion` remains `1.0.0`. The audio callback advances this transport in samples. JavaScript publishes edits and may poll position, without scheduling notes or releases. The older `playPattern` retains its timer-based contract.
 
-`playSequence(options)` starts at step zero. `updateSequence(changes)` merges root fields and the `voice` dictionary into the last accepted configuration; `steps` replaces the complete step list. Both return Boolean publication acceptance, before audio applies the revision. Validation, bank exhaustion or a full publication mailbox reject the whole edit. Three preallocated banks keep the callback free of allocation and locks. Retry rejected edits outside the callback.
+`playSequence(options)` starts at the beginning of the traversal. `updateSequence(changes)` merges root fields and the `voice` dictionary into the last accepted configuration; `steps` replaces the complete step list. Both return Boolean publication acceptance, before audio applies the revision. Validation, bank exhaustion or a full publication mailbox reject the whole edit. Three preallocated banks keep the callback free of allocation and locks. Retry rejected edits outside the callback. Start the engine successfully before using these publication methods. `playSequence` resets position and releases the previous transport generation, preserving keyboard-held voices. `updateSequence` does not start or resume a stopped transport.
 
 | Root field | Rule |
 | --- | --- |
@@ -265,9 +265,27 @@ Detect `playSequence`, `updateSequence`, `stopSequence` and `getSequenceState` b
 
 Each step has either `notes` (1-32 integer MIDI values, 12-119, duplicates allowed) or `rest: true`. `gate` is 0.01-1, default 0.8, of that swung sixteenth. Optional `overrides` merges voice shaping over the root voice. Chords on sequence steps are independent of the keyboard's chord mode. A chord receives fixed initial event compensation; adding independent notes does not change existing gains.
 
+When a voice edit changes `filterType` to `none`, inherited `filterHz`/`filterQ` are removed. A non-sine source clears inherited FM fields; changing to stereo placement clears inherited spatial coordinates, and spatial placement clears inherited pan. Incompatible inherited `modulations` must still be replaced or cleared explicitly with `[]`. This merge behavior does not permit unsupported noteOn fields.
+
 Structural edits apply at the next step. Compatible continuous voice parameters use 10 ms ramps without restarting phases. Shortened loops wrap their cursor into the new traversal. Starting `playPattern` stops future transport events; starting `playSequence` cancels future pattern events. Existing releases are preserved. Transport and keyboard share the configured voice pool, at most 32 voices, with the sustained-note stealing policy.
 
-`stopSequence()` returns Boolean and releases only transport-owned voices at the next block. Gates are owned by voice slots and execute without using the public command queue, even when that queue is full. `getSequenceState()` returns `{ playing, step, beat, position, bpm, revision }`; step is the original zero-based step index (−1 before the first step), beat/position count quarter notes, and revision identifies the applied configuration. Polling does not alter timing.
+`stopSequence()` returns Boolean and releases only transport-owned voices at the next block. Gates are owned by voice slots and execute without using the public command queue, even when that queue is full. `getSequenceState()` returns `{ playing, step, beat, position, bpm, revision }`; step is the original zero-based step index (−1 before the first step), beat/position count quarter notes, and revision identifies the applied configuration. Polling does not alter timing. Native completion and stopping emit no `patternend`; that event belongs only to `playPattern`.
+
+### `playSequence(options)`
+
+Publish the root/step fields above and start at the beginning of the traversal; `steps` is required. Returns Boolean acceptance. A new accepted play cancels future `playPattern` events and reports `completed: false` for the replaced timer pattern.
+
+### `updateSequence(changes)`
+
+Publish any supported root/configuration fields; supplied `steps` replaces the complete list. Returns Boolean acceptance of the merged edit. It does not restart playback.
+
+### `stopSequence()`
+
+Returns Boolean publication acceptance, releasing only native transport voices when applied. Handle rejection or use owner shutdown when all scheduling must end.
+
+### `getSequenceState()`
+
+Returns the state object above without starting playback or changing timing. The `revision` is the configuration applied by audio, not merely the last accepted publication.
 
 ```javascript
 if (typeof synth.playSequence !== 'function') throw new Error('Native transport unavailable')
@@ -284,7 +302,7 @@ synth.stopSequence()
 
 Native stereo chain: voices → fixed input gain → chorus → ping-pong delay → reverb → master volume → optional saturation → final lookahead limiter. Independent notes never trigger voice-count normalization. The limiter remains the final protection.
 
-Returns Boolean acceptance. Partial updates merge into the last accepted processing configuration, validate the complete result and publish atomically. Continuous controls ramp over 10 ms. Unknown fields, numeric booleans and non-finite values reject the whole edit. Detect method presence before use.
+Requires a running engine and returns Boolean acceptance. Partial updates merge into the last accepted processing configuration, validate the complete result and publish atomically. Continuous controls ramp over 10 ms. Unknown fields, numeric booleans and non-finite values reject the whole edit. Detect method presence before use.
 
 | Section | Fields and initial values |
 | --- | --- |
@@ -295,6 +313,8 @@ Returns Boolean acceptance. Partial updates merge into the last accepted process
 | `saturation` | `enabled`: false; `drive`: 1-4, initially 1; `mix`: 0-1, initially 1. Creative soft waveshaping that changes timbre. |
 
 Delay sync accepts `off`, `quarter`, `eighth`, `sixteenth`, `quarterTriplet`, `eighthTriplet` or `sixteenthTriplet`. Sync follows the native transport BPM, initially 120. Disabling an effect gradually closes its input and drains its tail, then restores exact bypass. Tails are bounded to 30 seconds with a final fade. `stopAll()` performs panic: it fades voices, stops the new transport and invalidates effect histories in bounded work. It retains the behavior of not canceling future playPattern timer events. `shutdown()` cancels both schedulers and frees buffers off the callback.
+
+Processing applies to the shared stereo master bus, including simultaneous timed tones and held/transport voices. There are no per-voice sends or separate music/effects buses. Delay synchronization follows native transport BPM, not `playPattern` tempo.
 
 Defaults keep all effects and saturation disabled, input gain at unity, and preserve the earlier render exactly. Enabling saturation is an explicit sound-design choice. Output protection is still required with dense voices and effect feedback.
 
@@ -310,7 +330,7 @@ Defaults keep all effects and saturation disabled, input gain at unity, and pres
 | `depth` | 0-1, default 0; scales up to four cutoff octaves, 0.45 PWM offset or ten FM-index units. Two contributions sum with safe clamping. |
 | `sync` | Same musical values as delay; default off. Synced rates follow native tempo (up to 30 Hz at 300 BPM in sixteenth-note triplets). |
 
-Edits preserve oscillator/LFO phases. Continuous modulation contributions ramp over 10 ms; cutoff stays within 20 Hz and the frequency maximum, PWM within 0.05-0.95, FM index within 0-10. Initial modulations may also be inherited by sequence voices and overridden per step.
+Edits preserve oscillator/LFO phases. Continuous modulation contributions ramp over 10 ms; cutoff stays within 20 Hz and the frequency maximum, PWM within 0.05-0.95, FM index within 0-10. Initial modulations may also be inherited by sequence voices and overridden per step. These two slots coexist with the independent `lfoFreq`/`lfoDepth` pitch vibrato; they are not accepted by timed tones, chords or `playPattern`.
 
 ## `playChord(options)`
 
@@ -490,11 +510,11 @@ Changes the master level with a short smoothing ramp.
 
 ## `stopAll()`
 
-Fades active voices over roughly 20 ms to avoid clicks. It does not cancel future pattern steps.
+Fades active voices over roughly 20 ms to avoid clicks, stops future native sequence events and invalidates effect histories as panic. It does not cancel future timer-based `playPattern` steps. This is distinct from disabling an effect, which drains its tail.
 
 ## `shutdown()`
 
-Cancels the pending pattern, stops the native stream and releases its audio resources. Call it when the owner closes.
+Cancels pending timer patterns and native transport, stops the stream and releases voice/effect resources outside the audio callback. Call it when the owner closes, after cancelling app-owned timers/retries. It emits no completion event.
 
 ## `patternend` event
 
@@ -514,7 +534,7 @@ The payload is `{ completed: Boolean }`.
 
 - An accepted `playPattern` produces one event unless `shutdown()` discards it before completion. A rejected call produces none.
 - `completed: true` arrives at the natural end of the pattern, about 1 ms after the sum of its step lengths counted from the call. The scheduler has finished at that point, although swing, callback timing and the binaural FIR tail can leave audio playing after the event.
-- `completed: false` arrives when a later accepted `playPattern` replaces the pattern before it ends.
+- `completed: false` arrives when a later accepted `playPattern` or `playSequence` replaces the pattern before it ends.
 - `shutdown()` discards a pending pattern without an event. `stopAll()` does not cancel patterns, so it produces none either.
 
 Events have no pattern identifier. Only the current owner of the shared scheduler should chain patterns. Remove its listener during cleanup. Shutdown generates no event and leaves any event already queued for JavaScript in place.
@@ -604,13 +624,13 @@ Returns a new snapshot without resetting counters. Available before start and af
 | `outputPeakDbFS`           | `{ left, right }` peaks of final float output in the latest completed approximately 200 ms window.                                      |
 | `outputRmsDbFS`            | `{ left, right }` RMS of that same window.                                                                                              |
 | `preLimiterPeakDb` | Maximum native peak before the limiter since reset, in dBFS; diagnostics required. |
-| `maxLimiterReductionDb` | Maximum native limiter attenuation since reset, in dB; a brief intervention persists across UI polls. |
+| `maxLimiterReductionDb` | Maximum native limiter attenuation since reset, in dB; diagnostics required. A brief intervention persists across UI polls. |
 | `limiterReductionDb`       | Maximum limiter attenuation in that window, as a positive dB magnitude.                                                                 |
 | `underrunCount`            | Android Oboe accumulated backend xruns since reset/start when supported; otherwise `null`.                                              |
 | `bufferFrames`             | Android Oboe output buffer size; otherwise `null`. This is distinct from `callbackFrames`.                                              |
 | `estimatedOutputLatencyMs` | Android timestamp-based stream-to-DAC estimate plus module lookahead, when valid; otherwise `null` (always `null` on this iOS backend). |
 
-`renderLoad`, `peakRenderLoad`, `outputPeakDbFS`, `outputRmsDbFS` and `limiterReductionDb` are `null` until enabled and measured, and after shutdown. Android backend metrics (`underrunCount`, `bufferFrames` and `estimatedOutputLatencyMs`) are best-effort readings independent of this diagnostic switch. Signal windows use the final output after master volume, limiter and clamping, with a silence floor of -120 dBFS. A query does not start or consume a window. iOS does not expose a trustworthy underrun count or hardware output buffer size through this source-node backend, so those fields are `null`. Android preserves supported xrun totals across stream recovery and resets the baseline with `resetStats()`. If a route makes xrun coverage unavailable, the count stays `null` until reset/start restores a measurable window. The latency estimate excludes command/scheduler delay and any external DAC/HDMI latency unknown to Android. Timestamp errors, unsupported backends and negative estimates return `null`. It is queried off the audio callback. A zero underrun count does not prove clean sound. Render load includes elapsed callback work, not total app CPU.
+`renderLoad`, `peakRenderLoad`, `outputPeakDbFS`, `outputRmsDbFS`, `preLimiterPeakDb`, `maxLimiterReductionDb` and `limiterReductionDb` are `null` until enabled and measured, and after shutdown. Android backend metrics (`underrunCount`, `bufferFrames` and `estimatedOutputLatencyMs`) are best-effort readings independent of this diagnostic switch. Signal windows use the final output after master volume, limiter and clamping, with a silence floor of -120 dBFS. A query does not start or consume a window. iOS does not expose a trustworthy underrun count or hardware output buffer size through this source-node backend, so those fields are `null`. Android preserves supported xrun totals across stream recovery and resets the baseline with `resetStats()`. If a route makes xrun coverage unavailable, the count stays `null` until reset/start restores a measurable window. The latency estimate excludes command/scheduler delay and any external DAC/HDMI latency unknown to Android. Timestamp errors, unsupported backends and negative estimates return `null`. It is queried off the audio callback. A zero underrun count does not prove clean sound. Render load includes elapsed callback work, not total app CPU.
 
 Render load is a fraction: multiply by 100 for a percentage. For example, `0.012` is 1.2% of the block budget, while `1.0` is 100%. An open stream still renders silent blocks, including output/limiter work and enabled signal measurements, so no active voices does not imply zero load. Callback elapsed time varies with scheduling and system activity; displayed decimal places do not establish measurement accuracy. Compare the same configuration on the same device. Percentages from a simulator and a phone do not provide a direct performance comparison.
 

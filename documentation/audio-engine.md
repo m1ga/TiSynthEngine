@@ -5,7 +5,7 @@ The native signal path explains how mixing profiles and voice capacity affect th
 ## Signal path
 
 ```text
-playTone / playChord / playPattern
+playTone / playChord / playPattern / noteOn / native sequence
              |
        strict validation
              |
@@ -17,7 +17,9 @@ playTone / playChord / playPattern
              |
        sum voices and steal tails
              |
-      smoothed master volume
+ fixed input gain -> chorus -> ping-pong delay -> stereo reverb
+             |
+      smoothed master volume -> optional creative saturation
              |
  stereo-linked lookahead limiter
              |
@@ -84,7 +86,7 @@ In protected profiles, gain is fixed when an event starts:
 voiceGain = waveformGain(waveType) * profileFactor / sqrt(eventVoiceCount)
 ```
 
-One tone and one pattern step have an event voice count of 1. A chord uses the number of pitches in that chord. Dividing by the square root of the count keeps the event close to constant power without changing gain sample by sample.
+One tone, one independently held note and one timer-pattern step have an event voice count of 1. A chord or native sequence chord uses the number of pitches in that event. Dividing by the square root of the count keeps the event close to constant power without changing gain sample by sample.
 
 Waveforms are calibrated toward a common source RMS:
 
@@ -111,7 +113,7 @@ The profile is fixed when `startEngine()` opens the stream.
 
 ## Limiter
 
-A single stereo-linked peak limiter sits after master volume. Linking preserves the stereo image when only one channel has the largest peak.
+A single stereo-linked peak limiter sits after master volume and optional creative saturation. Linking preserves the stereo image when only one channel has the largest peak.
 
 | Parameter | Value                            |
 | --------- | -------------------------------- |
@@ -131,9 +133,9 @@ Pan uses equal-power coefficients. A centered sound feeds both channels; the sum
 
 ## Voice pool
 
-`maxVoices` reserves between 1 and 32 active voice slots. The setting controls capacity and leaves event gain unchanged. When every slot is occupied, the voice with the least time remaining is faded and its slot is reused.
+`maxVoices` reserves between 1 and 32 active voice slots. The setting controls capacity and leaves event gain unchanged. Timed-only replacement selects the least remaining duration. Sustained/transport replacement prefers releasing voices, then the oldest attack. A reused slot receives a short fade tail; no category owns reserved slots.
 
-A chord is one command with up to 32 pitches. If its size exceeds the session's voice capacity, slots with the least time remaining are reused. For normal apps, choose the largest real overlap plus room for release tails.
+A chord is one command with up to 32 pitches. If its size exceeds the session's voice capacity, slots are reused according to the replacement policy above. When any held/transport voice is active, that policy also applies to incoming timed tones/chords. For normal apps, choose the largest real overlap plus room for release tails.
 
 ## Command queue
 
@@ -145,7 +147,7 @@ The playPattern scheduler runs outside the audio callback. A platform timer plac
 
 ## Shared DSP core
 
-The envelope, the state-variable filter, the sweep helpers, the FM sine and the cents conversion live once, in `shared/synth_core.h`. It is plain C, header-only and allocation-free. The Android renderer includes it from `android/jni/SynthOboeEngine.cpp` and the iOS renderer from `ios/Classes/TiSynthengineModule.m`, so both platforms run the same code. Voice management, mixing and the limiter are still separate per platform.
+The envelope, the state-variable filter, the sweep helpers, the FM sine and the cents conversion live once, in `shared/synth_core.h`. It is plain C, header-only and allocation-free. The Android renderer includes it from `android/jni/SynthOboeEngine.cpp` and the iOS renderer from `ios/Classes/TiSynthengineModule.m`, so both platforms run the same code. Backend voice integration, mixing and the limiter remain separate per platform. Held envelopes/ramps, transport, master effects, extra modulation and compatible retrigger support also have shared C cores.
 
 ## Android implementation
 

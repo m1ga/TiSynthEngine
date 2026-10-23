@@ -1,6 +1,6 @@
 # Interactive example
 
-The Classic Titanium app in [app.js](app.js) demonstrates all eleven public methods and the `patternend` event on Android and iOS. It uses the current 1.0.0 module packages, including binaural and statistics support. The default engine configuration is 16 voices, `conservative` mixing and the `playback` session; master volume starts at 100% and optional diagnostics start off.
+The Classic Titanium app in [app.js](app.js) demonstrates the eleven timed-playback/statistics methods and the `patternend` event on Android and iOS. It uses the current 1.0.0 module packages, including binaural and statistics support. Held voices, native transport, master processing and voice LFOs have copyable examples in the [advanced documentation](../documentation/examples.md#sustained-game-motor); this reference app does not expose those newer controls. The default engine configuration is 16 voices, `conservative` mixing and the `playback` session; master volume starts at 100% and optional diagnostics start off.
 
 ## Run it
 

@@ -286,7 +286,7 @@ synth.playChord({
 
 Four separate `playTone` calls are four independent full-gain events. They are not atomic and may start in different audio callbacks. Their sum is also hotter and can push the limiter. Separate calls are correct for unrelated taps or effects; use `playChord` when the app already knows the pitches are one chord.
 
-`maxVoices` sets voice capacity without changing loudness. When the pool is full, the voice with the least time remaining is faded and reused. Leave a small margin for release tails, but do not set 32 by habit when the app can only make four sounds at once.
+`maxVoices` sets voice capacity without changing loudness. Timed-only pools replace the least remaining duration; held/transport pools prefer a releasing voice, then the oldest attack. Leave a small margin for release tails, but do not set 32 by habit when the app can only make four sounds at once.
 
 ## Mixing profiles and limiter
 
@@ -609,3 +609,24 @@ function playAllSimonPads () {
 ```
 
 See [Examples](examples.md) for complete code and [Recommendations](recommendations.md) for gain and device-testing advice.
+
+## Holding a sound and adding movement
+
+Choose a held voice when the ending follows a player action instead of a fixed duration: motor, charge beam, pad or the last chord of a ceremony. `noteOn` starts a positive app-owned ID; `noteOff` begins release from the current level, and compatible `updateVoice` edits ramp over 10 ms. Distinct IDs remain independent events with fixed gain. Reserve enough capacity for their releases and unrelated effects, and release on cancellation as well as ordinary key up. See the [held motor recipe](examples.md#sustained-game-motor) for retry/cleanup handling.
+
+A fanfare's melody benefits from `playSequence`: native sixteenth steps, chords, rests, gates, swing and pitch-ordered arpeggios do not depend on JavaScript firing each note. A long final release can ring over subsequent steps. This musical grid has no arbitrary millisecond lengths or ties; use a held chord when its duration must follow a presentation rather than that grid. See [transport usage](guide.md#choose-the-musical-transport).
+
+The two additional voice LFOs move filter cutoff, square PWM or sine FM index using sine/triangle shapes. Cutoff movement creates slow breathing or rhythmic filtering; PWM adds changing harmonic color; a small FM-index modulation varies brightness. Free rates reach 20 Hz, and synced rates follow native transport tempo. These slots are separate from pitch vibrato. Avoid deep/high-rate modulation with strong resonance or high-frequency FM; safe parameter clamping does not guarantee a pleasant or alias-free sound. The [two-LFO example](examples.md#two-voice-lfos) shows a filtered PWM pad.
+
+## Native space and creative drive
+
+| Processor | What changes | Useful starting region |
+| --- | --- | --- |
+| Stereo chorus | A short interpolated delay with offset LFO phases adds width and movement. | Rate 0.3 to 0.8 Hz, depth 0.15 to 0.35, mix 0.08 to 0.2. |
+| Ping-pong delay | Alternating echoes create rhythmic or spatial repeats. | 180 to 350 ms or synced eighths, feedback 0.15 to 0.35, mix 0.08 to 0.18. |
+| Stereo reverb | Damped comb/allpass reflections create a diffuse decay. | Decay 0.8 to 1.8 seconds, damping 0.5 to 0.7, mix 0.08 to 0.18. |
+| Optional saturation | Soft waveshaping adds harmonics and changes attack/timbre. | Drive 1.2 to 1.6 with a small blend; compare at matched levels. |
+
+All processors are off initially, with fixed input gain 1. Activate them explicitly through `setMasterProcessing` on a running engine; [copyable configuration](examples.md#chorus-delay-reverb-and-creative-saturation) and [exact ranges](api.md#setmasterprocessingoptions) are available. The shared chain affects every simultaneous sound. A subtle reverb can enrich a result chord, while many wet collisions can obscure short gameplay feedback. There are no per-voice sends or separate music/effects buses.
+
+Disabling an effect closes its input gradually and drains the tail before exact bypass; it does not immediately erase its history. Panic invalidates histories. Saturation is a creative choice rather than automatic gain protection; the final limiter stays in place. Match dry/wet comparison levels and watch accumulated limiter reduction so a louder version does not win an A/B comparison merely by level. None of these effects makes a small speaker reproduce missing bass.
