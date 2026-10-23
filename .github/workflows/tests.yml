@@ -43,10 +43,16 @@ jobs:
         run: |
           cc -std=c11 -O2 -Wall -Wextra -Werror tests/sequence_core_regression.c -lm -o "$RUNNER_TEMP/sequence"
           "$RUNNER_TEMP/sequence"
+          for source in unified_sequence transport_core routing_core spatial_update multisequence_clock; do
+            cc -std=c11 -O2 -Wall -Wextra -Werror "tests/${source}_regression.c" -lm -o "$RUNNER_TEMP/$source"
+            "$RUNNER_TEMP/$source"
+          done
           cc -std=c11 -O2 -Wall -Wextra -Werror tests/effects_core_regression.c -lm -o "$RUNNER_TEMP/effects"
           "$RUNNER_TEMP/effects"
           cc -std=c11 -O2 -Wall -Wextra -Werror tests/modulation_core_regression.c -lm -o "$RUNNER_TEMP/modulation"
           "$RUNNER_TEMP/modulation"
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror -pthread tests/transport_concurrency_regression.cpp -o "$RUNNER_TEMP/transport-concurrency"
+          "$RUNNER_TEMP/transport-concurrency"
 
       - name: Shared statistics tests
         run: |
@@ -66,11 +72,13 @@ jobs:
             test/ti/synthengine/SynthContractRegression.java \
             test/ti/synthengine/SynthHeldContractRegression.java \
             test/ti/synthengine/SynthSpatialContractRegression.java \
+            test/ti/synthengine/SynthUnifiedContractRegression.java \
             src/ti/synthengine/SynthDsp.java \
             test/ti/synthengine/SynthDspRegression.java
           java -cp "$test_dir" ti.synthengine.SynthContractRegression
           java -cp "$test_dir" ti.synthengine.SynthHeldContractRegression
           java -cp "$test_dir" ti.synthengine.SynthSpatialContractRegression
+          java -cp "$test_dir" ti.synthengine.SynthUnifiedContractRegression
           java -cp "$test_dir" ti.synthengine.SynthDspRegression
 
   ios-contract-tests:
@@ -85,3 +93,5 @@ jobs:
           "$RUNNER_TEMP/studio-corpus"
           clang -fobjc-arc -Wall -Wextra -framework Foundation tests/studio_contract_ios.m ios/Classes/TiSynthengineContract.m -o "$RUNNER_TEMP/studio-contract"
           "$RUNNER_TEMP/studio-contract"
+          clang -fobjc-arc -Wall -Wextra -framework Foundation tests/unified_contract_ios.m ios/Classes/TiSynthengineContract.m -o "$RUNNER_TEMP/unified-contract"
+          "$RUNNER_TEMP/unified-contract"

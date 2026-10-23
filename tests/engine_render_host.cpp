@@ -55,7 +55,11 @@ int failures = 0;
 struct Rig {
   EngineHandle engine;
   explicit Rig(int voices = 8, int profile = 1) {
+#ifdef SYNTH_BENCH_MAX_SEQUENCES
+    engine = std::make_shared<Engine>(voices, profile, SYNTH_BENCH_MAX_SEQUENCES);
+#else
     engine = std::make_shared<Engine>(voices, profile);
+#endif
     engine->renderSampleRate_ = static_cast<int>(kRate);
     engine->reportedSampleRate_.store(static_cast<int>(kRate));
     engine->initializeLimiter();

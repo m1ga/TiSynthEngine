@@ -4,10 +4,10 @@
 #undef main
 #include <cassert>
 static void sequence(Rig &r,int notes=1) {
- auto *c=synth_sequence_begin_write(&r.e().sequence_);assert(c);c->stepCount=1;
+ auto *c=synth_transport_begin_write(&r.e().transport_,1,1);assert(c);c->stepCount=1;c->loop=1;
  c->steps[0].noteCount=notes;c->steps[0].gate=.1;c->steps[0].voice.volume=.03;
  for(int i=0;i<notes;i++)c->steps[0].notes[i]=(uint8_t)(48+i);
- assert(synth_sequence_commit(&r.e().sequence_,c,1));
+ assert(synth_transport_commit(&r.e().transport_,c,1));
 }
 static int sequenceActive(Rig &r,bool releasing=false) {int n=0;for(auto &v:r.e().voices_)if(v.active&&v.sequenceOwned&&(!releasing||v.held.releasing))n++;return n;}
 int main(){
@@ -15,9 +15,9 @@ int main(){
  // Otherwise an older keyboard note is stolen instead of the now-releasing sequence note.
  { Rig full(2);auto key=note(full,440,100,5,80,.03,0);key.type=SYNTH_CMD_HELD_ON;key.voiceId=500;
    assert(!full.e().enqueue(key));full.render(256);
-   auto *config=synth_sequence_begin_write(&full.e().sequence_);assert(config);config->stepCount=1;
+   auto *config=synth_transport_begin_write(&full.e().transport_,1,1);assert(config);config->stepCount=1;config->loop=1;
    config->steps[0].noteCount=1;config->steps[0].notes[0]=60;config->steps[0].gate=1;config->steps[0].voice.volume=.03;
-   assert(synth_sequence_commit(&full.e().sequence_,config,1));full.render(6001);
+   assert(synth_transport_commit(&full.e().transport_,config,1));full.render(6001);
    bool retained=false;for(auto &v:full.e().voices_)if(v.active&&v.held.voiceId==500)retained=!v.held.releasing;
    assert(retained);
  }
@@ -26,8 +26,8 @@ int main(){
  for(int i=0;i<127;i++){Command c;c.type=99;assert(!r.e().enqueue(c));}
  r.render(120);assert(sequenceActive(r,true)==1);
  auto c=note(r,440,100,5,20,.03,0);c.type=SYNTH_CMD_HELD_ON;c.voiceId=42;
- assert(!r.e().enqueue(c));r.render(512);r.e().stopSequence();r.render(512);
- assert(!r.e().sequence_.playing);
+ assert(!r.e().enqueue(c));r.render(512);r.e().stopSequence(1);r.render(512);
+ assert(!r.e().transport_.slots[0].playing);
  bool keyboard=false;for(auto &v:r.e().voices_)if(v.active&&v.held.voiceId==42)keyboard=!v.held.releasing;
  assert(keyboard);
  // Chords consume the same bounded voice pool; stale gates cannot release replacements.

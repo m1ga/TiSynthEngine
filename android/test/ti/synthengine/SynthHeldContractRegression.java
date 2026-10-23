@@ -12,7 +12,7 @@ public final class SynthHeldContractRegression {
     check(SynthContract.validateUpdateVoice(m("voiceId",2,"note","A4","fmDepth",0,"filterQ",2),19845).accepted,"partial update");
     check(!SynthContract.validateUpdateVoice(m("voiceId",2,"note","A4","frequency",440),19845).accepted,"ambiguous pitch");
     check(!SynthContract.validateUpdateVoice(m("voiceId",2,"volume",Double.NaN),19845).accepted,"NaN update");
-    for(String key:new String[]{"attack","release","waveType","filterType","waveTable","spatialX","pan","bitDepth","detune"})check(!SynthContract.validateUpdateVoice(m("voiceId",2,key,1),19845).accepted,"immutable "+key);
+    for(String key:new String[]{"attack","release","waveType","filterType","waveTable","bitDepth","detune"})check(!SynthContract.validateUpdateVoice(m("voiceId",2,key,1),19845).accepted,"immutable "+key);
     check(!SynthContract.validateUpdateVoice(m("voiceId",2),19845).accepted,"empty update");
     System.out.println("held contract: PASS");
   }

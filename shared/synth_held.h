@@ -8,7 +8,7 @@
 
 enum { LIVE_FREQUENCY, LIVE_VOLUME, LIVE_FILTER_HZ, LIVE_FILTER_Q,
        LIVE_LFO_FREQ, LIVE_LFO_DEPTH, LIVE_PULSE_WIDTH, LIVE_FM_RATIO,
-       LIVE_FM_DEPTH, SYNTH_LIVE_COUNT };
+       LIVE_FM_DEPTH, LIVE_NOISE_RATE, LIVE_LOWPASS_HZ, LIVE_PAN, SYNTH_LIVE_COUNT };
 #define SYNTH_CMD_HELD_ON 4
 #define SYNTH_CMD_HELD_OFF 5
 #define SYNTH_CMD_HELD_UPDATE 6
@@ -45,6 +45,7 @@ static inline double synth_held_envelope(const SynthHeld *h, int age, int attack
 typedef struct {
   double value[SYNTH_LIVE_COUNT], target[SYNTH_LIVE_COUNT], step[SYNTH_LIVE_COUNT];
   int remaining[SYNTH_LIVE_COUNT];
+  uint32_t activeMask;
 } SynthLive;
 static inline void synth_live_init(SynthLive *s, const double *values) {
   memset(s,0,sizeof(*s));
@@ -53,18 +54,20 @@ static inline void synth_live_init(SynthLive *s, const double *values) {
 static inline void synth_live_update(SynthLive *s, uint32_t mask, const double *values, int frames) {
   if (frames < 1) frames=1;
   for(int i=0;i<SYNTH_LIVE_COUNT;i++) if (mask & (1u<<i)) {
-    s->target[i]=values[i]; s->remaining[i]=frames;
+    if(s->target[i]==values[i])continue;
+    s->target[i]=values[i]; s->remaining[i]=frames;s->activeMask|=1u<<i;
     s->step[i]=(values[i]-s->value[i])/frames;
   }
 }
 static inline void synth_live_tick(SynthLive *s) {
-  for(int i=0;i<SYNTH_LIVE_COUNT;i++) if(s->remaining[i]>0) {
-    if(--s->remaining[i]==0) s->value[i]=s->target[i];
+  if(!s->activeMask)return;
+  for(int i=0;i<SYNTH_LIVE_COUNT;i++) if(s->activeMask&(1u<<i)) {
+    if(--s->remaining[i]==0) {s->value[i]=s->target[i];s->activeMask&=~(1u<<i);}
     else s->value[i]+=s->step[i];
   }
 }
 static inline uint32_t synth_live_allowed(int waveType, int filterType) {
-  uint32_t mask=(1u<<LIVE_FREQUENCY)|(1u<<LIVE_VOLUME)|(1u<<LIVE_LFO_FREQ)|(1u<<LIVE_LFO_DEPTH);
+  uint32_t mask=(1u<<LIVE_NOISE_RATE)|(1u<<LIVE_LOWPASS_HZ)|(1u<<LIVE_PAN)|(1u<<LIVE_FREQUENCY)|(1u<<LIVE_VOLUME)|(1u<<LIVE_LFO_FREQ)|(1u<<LIVE_LFO_DEPTH);
   if(filterType) mask|=(1u<<LIVE_FILTER_HZ)|(1u<<LIVE_FILTER_Q);
   if(waveType==1) mask|=1u<<LIVE_PULSE_WIDTH;
   if(waveType==0) mask|=(1u<<LIVE_FM_RATIO)|(1u<<LIVE_FM_DEPTH);

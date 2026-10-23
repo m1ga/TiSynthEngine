@@ -8,7 +8,7 @@ public final class SynthContractRegression {
 
     public static void main(String[] args) throws java.io.IOException {
         assertEquals("1.0.0", SynthContract.API_VERSION, "public API version");
-        assertTrue(SynthContract.validateStartEngine(null).accepted, "omitted start options");
+        assertTrue(SynthContract.validateStart(null).accepted, "omitted start options");
         assertEquals(8, SynthContract.DEFAULT_MAX_VOICES, "default voices");
         assertEquals("conservative", SynthContract.DEFAULT_MIXING_PROFILE, "default profile");
         assertEquals(32, SynthContract.MAX_MAX_VOICES, "voice capacity");
@@ -74,80 +74,20 @@ public final class SynthContractRegression {
                 map("frequencies", new Object[]{440.0}, "pan", 0.5), MAX_FREQUENCY),
                 "pan", "unsupported_option", "chord rejects ignored pan option");
 
-        Object[] structuredSteps = new Object[]{
-                map("note", "C4", "duration", 120),
-                map("rest", true, "duration", 60),
-                map("frequency", 660.0, "noteValue", "8n")
-        };
-        assertAccepted(SynthContract.validatePattern(map("steps", structuredSteps), MAX_FREQUENCY),
-                "structured pattern");
-        assertAccepted(SynthContract.validatePattern(map(
-                "steps", new Object[]{map("frequency", 200.0, "noiseRate", 500.0,
-                        "noiseRateEnd", 8000.0, "lowPassHz", 3000.0, "bitDepth", 8)}),
-                MAX_FREQUENCY), "character pattern step");
-        assertAccepted(SynthContract.validatePattern(map(
-                "attack", 2,
-                "release", 80,
-                "steps", new Object[]{map("frequency", 120.0, "duration", 180,
-                        "release", 150)}), MAX_FREQUENCY),
-                "pattern envelope uses inherited attack");
-        assertRejectedWith(SynthContract.validatePattern(map(
-                "attack", 40,
-                "release", 150,
-                "steps", new Object[]{map("frequency", 120.0, "duration", 180)}),
-                MAX_FREQUENCY), "release", "release_exceeds_remaining_duration",
-                "inherited pattern envelope must fit step duration");
-        assertAccepted(SynthContract.validatePattern(map(
-                "bpm", 120.0,
-                "noteValue", "8n",
-                "attack", 20,
-                "release", 100,
-                "steps", new Object[]{map("note", "A3")}), MAX_FREQUENCY),
-                "pattern envelope resolves inherited note-value timing");
-        assertAccepted(SynthContract.validatePattern(map(
-                "waveType", 5,
-                "waveTable", new Object[]{-1.0, 0.0, 1.0, 0.0},
-                "steps", new Object[]{map("note", "A4")}), MAX_FREQUENCY),
-                "pattern inherits wavetable");
-        assertRejectedWith(SynthContract.validatePattern(map(
-                "waveType", 5,
-                "steps", new Object[]{map("note", "A4")}), MAX_FREQUENCY),
-                "waveTable", "missing_required", "pattern wavetable needs samples");
-        assertRejectedWith(SynthContract.validatePattern(
-                map("steps", new Object[]{"C4"}), MAX_FREQUENCY),
-                "steps", "invalid_step_type", "primitive pattern step");
-        assertRejectedWith(SynthContract.validatePattern(
-                map("steps", new Object[]{map("note", "C4", "value", "8n")}), MAX_FREQUENCY),
-                "value", "unsupported_option", "value alias is unsupported");
-        assertRejectedWith(SynthContract.validatePattern(
-                map("steps", new Object[]{map("note", "C4", "velocity", 0.5)}), MAX_FREQUENCY),
-                "velocity", "unsupported_option", "velocity alias is unsupported");
-        assertRejectedWith(SynthContract.validatePattern(
-                map("steps", structuredSteps, "mystery", true), MAX_FREQUENCY),
-                "mystery", "unsupported_option", "pattern rejects unknown root option");
-        assertRejectedWith(SynthContract.validatePattern(
-                map("steps", structuredSteps, "duration", 120), MAX_FREQUENCY),
-                "duration", "unsupported_option", "pattern rejects ignored root duration");
-        assertRejectedWith(SynthContract.validatePattern(
-                map("steps", new Object[]{map("note", "C4", "mystery", true)}), MAX_FREQUENCY),
-                "mystery", "unsupported_option", "pattern rejects unknown step option");
-        assertRejected(SynthContract.validatePattern(
-                map("steps", steps(513)), MAX_FREQUENCY), "pattern step limit is strict");
-
-        assertRejected(SynthContract.validateStartEngine(map("maxVoices", 33)), "voice upper bound");
-        assertRejectedWith(SynthContract.validateStartEngine(map("latency", "low")),
+        assertRejected(SynthContract.validateStart(map("maxVoices", 33)), "voice upper bound");
+        assertRejectedWith(SynthContract.validateStart(map("latency", "low")),
                 "latency", "unsupported_option", "start rejects unknown option");
-        assertAccepted(SynthContract.validateStartEngine(
+        assertAccepted(SynthContract.validateStart(
                 map("maxVoices", 32, "mixingProfile", "speakerSafe")), "stress capacity");
-        assertAccepted(SynthContract.validateStartEngine(map("maxVoices", 8)),
+        assertAccepted(SynthContract.validateStart(map("maxVoices", 8)),
                 "start without an audio session");
-        assertAccepted(SynthContract.validateStartEngine(map("audioSession", "playback")),
+        assertAccepted(SynthContract.validateStart(map("audioSession", "playback")),
                 "playback audio session");
-        assertAccepted(SynthContract.validateStartEngine(map("audioSession", " Ambient ")),
+        assertAccepted(SynthContract.validateStart(map("audioSession", " Ambient ")),
                 "ambient audio session ignores case and whitespace");
-        assertRejectedWith(SynthContract.validateStartEngine(map("audioSession", "record")),
+        assertRejectedWith(SynthContract.validateStart(map("audioSession", "record")),
                 "audioSession", "unsupported_value", "start rejects an unknown audio session");
-        assertRejectedWith(SynthContract.validateStartEngine(map("audioSession", 1)),
+        assertRejectedWith(SynthContract.validateStart(map("audioSession", 1)),
                 "audioSession", "not_string", "start rejects a non-string audio session");
         assertRejectedWith(SynthContract.validateSetVolume(map("gain", 0.5)),
                 "gain", "unsupported_option", "volume rejects unknown option");
@@ -160,10 +100,6 @@ public final class SynthContractRegression {
         record("playTone", map("spatialX", .2, "pan", 0.0), SynthContract.validateTone(map("spatialX", .2, "pan", 0.0), MAX_FREQUENCY));
         Map<String,Object> spatialChord = map("frequencies", new Object[]{440.0, 660.0}, "spatialY", -.5);
         record("playChord", spatialChord, SynthContract.validateChord(spatialChord, MAX_FREQUENCY));
-        Map<String,Object> spatialPattern = map("spatialX", .5, "steps", new Object[]{map("frequency", 440.0, "spatialY", -.5)});
-        record("playPattern", spatialPattern, SynthContract.validatePattern(spatialPattern, MAX_FREQUENCY));
-        Map<String,Object> conflictingPattern = map("pan", .5, "steps", new Object[]{map("frequency", 440.0, "spatialY", -.5)});
-        record("playPattern", conflictingPattern, SynthContract.validatePattern(conflictingPattern, MAX_FREQUENCY));
         writeOrVerifyCorpus();
 
         System.out.println("SynthContractRegression: all tests passed");
@@ -179,11 +115,6 @@ public final class SynthContractRegression {
     private static SynthContract.Validation chord(Object... entries) {
         Map<String, Object> options = map(entries);
         return record("playChord", options, SynthContract.validateChord(options, MAX_FREQUENCY));
-    }
-
-    private static SynthContract.Validation pattern(Object... entries) {
-        Map<String, Object> options = map(entries);
-        return record("playPattern", options, SynthContract.validatePattern(options, MAX_FREQUENCY));
     }
 
     /**
@@ -262,7 +193,7 @@ public final class SynthContractRegression {
         }
         Map<String,Object> on=map("voiceId",1,"attack",2000,"decay",4000,"sustain",.5,"release",4000);
         assertAccepted(record("noteOn",on,SynthContract.validateNoteOn(on,MAX_FREQUENCY)),"held full ADSR");
-        for(String key:new String[]{"attack","release","waveType","filterType","waveTable","spatialX","pan","bitDepth","detune"}) {
+        for(String key:new String[]{"attack","release","waveType","filterType","waveTable","bitDepth","detune"}) {
             Map<String,Object> o=map("voiceId",1,key,1);
             assertRejected(record("updateVoice",o,SynthContract.validateUpdateVoice(o,MAX_FREQUENCY)),"immutable "+key);
         }
@@ -379,36 +310,6 @@ public final class SynthContractRegression {
                 "fmDepth", "fm_requires_sine", "chord fm needs a sine carrier");
 
         // Patterns: root values are inherited and every sounding step is checked on its own.
-        assertAccepted(pattern("filterType", "lowpass", "filterHz", 700.0,
-                "steps", new Object[]{map("note", "C4", "filterHzEnd", 3000.0), map("rest", true)}),
-                "pattern inherits the filter and sweeps it per step");
-        assertRejectedWith(pattern("filterHz", 700.0, "steps", new Object[]{map("note", "C4")}),
-                "filterHz", "filter_type_required", "root cutoff without any filter type");
-        assertAccepted(pattern("filterHz", 700.0, "steps", new Object[]{map("rest", true)}),
-                "rest-only pattern is not checked for sounding rules");
-        assertAccepted(pattern("filterHz", 700.0,
-                "steps", new Object[]{map("note", "C4", "filterType", "highpass")}),
-                "a step supplies the filter type the root lacks");
-        assertRejectedWith(pattern("fmDepth", 2.0,
-                "steps", new Object[]{map("note", "C4"), map("note", "E4", "waveType", 1)}),
-                "fmDepth", "fm_requires_sine", "a step overrides the wave away from sine");
-        assertRejectedWith(pattern("stepDuration", 100, "decay", 80,
-                "steps", new Object[]{map("note", "C4", "attack", 30)}),
-                "decay", "decay_exceeds_remaining_duration", "inherited decay must fit the step");
-        assertAccepted(pattern("sustain", 0.5,
-                "steps", new Object[]{map("note", "C4", "duration", 400, "decay", 100)}),
-                "a step supplies the decay for an inherited sustain");
-        assertRejectedWith(pattern("sustain", 0.5, "steps", new Object[]{map("note", "C4")}),
-                "sustain", "sustain_without_decay", "inherited sustain without any decay");
-        assertAccepted(pattern("detune", -5.0,
-                "steps", new Object[]{map("note", "C4"), map("note", "E4", "detune", 8.0, "fmDepthEnd", 0.0, "fmDepth", 2.0)}),
-                "pattern detune and fm per step");
-        assertRejectedWith(pattern("steps", new Object[]{map("frequency", 19000.0, "detune", 700.0)}),
-                "detune", "out_of_range", "detuned step pitch above the limit");
-        assertRejectedWith(pattern("steps", new Object[]{map("note", "C4", "detunes", new Object[]{1.0})}),
-                "detunes", "unsupported_option", "pattern has no per-note detunes");
-        assertRejectedWith(pattern("detunes", new Object[]{1.0}, "steps", new Object[]{map("note", "C4")}),
-                "detunes", "unsupported_option", "pattern root has no per-note detunes");
     }
 
     private static Map<String, Object> map(Object... entries) {

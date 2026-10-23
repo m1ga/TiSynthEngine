@@ -8,9 +8,6 @@ import org.appcelerator.kroll.annotations.Kroll;
 
 import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 @Kroll.module(name = "TiSynthEngine", id = "ti.synthengine")
 public class TiSynthEngineModule extends KrollModule {
@@ -38,16 +35,16 @@ public class TiSynthEngineModule extends KrollModule {
     private static final double VOLUME_MAX = SynthContract.MAX_VOLUME;
 
     private static final double MIN_FREQUENCY_HZ = SynthContract.MIN_FREQUENCY_HZ;
-    private static final int PATTERN_MAX_STEPS = SynthContract.MAX_PATTERN_STEPS;
+    private static final int SEQUENCE_MAX_STEPS = SynthContract.MAX_SEQUENCE_STEPS;
 
     private volatile SynthThread synthThread;
     private boolean statsEnabled;
+    private final java.util.concurrent.atomic.AtomicLong rejectedPublications=new java.util.concurrent.atomic.AtomicLong();
     private double[] lastStats = emptyStats();
     private final java.util.concurrent.atomic.AtomicLongArray rejected = new java.util.concurrent.atomic.AtomicLongArray(3);
-    private final java.util.concurrent.atomic.AtomicLong droppedPatternSteps = new java.util.concurrent.atomic.AtomicLong();
     // JNI layout: shared ST_* fields 0..14, pending/buffer/xruns/rate/capacity/latency 15..20.
     private static double[] emptyStats() {
-        double[] v = new double[21];
+        double[] v = new double[22];
         for(int i=6;i<15;i++) v[i]=Double.NaN;
         v[16]=v[17]=v[20]=Double.NaN; v[18]=44100; v[19]=SynthContract.DEFAULT_MAX_VOICES;
         return v;
@@ -70,12 +67,12 @@ public class TiSynthEngineModule extends KrollModule {
         r.put("preLimiterPeakDb",statNumber(v[13])); r.put("maxLimiterReductionDb",statNumber(v[14]));
         r.put("pendingCommands",v[15]); r.put("bufferFrames",statNumber(v[16]));
         r.put("underrunCount",statNumber(v[17])); r.put("sampleRate",v[18]); r.put("maxVoices",v[19]);
-        r.put("estimatedOutputLatencyMs",statNumber(v[20]));
+        r.put("estimatedOutputLatencyMs",statNumber(v[20]));r.put("priorityDropCount",v.length>21?v[21]:0);
+        r.put("rejectedPublicationCount",rejectedPublications.get());
         KrollDict reasons = new KrollDict();
         long validation=rejected.get(0), stopped=rejected.get(1), full=rejected.get(2);
         reasons.put("validation",validation); reasons.put("engineStopped",stopped); reasons.put("queueFull",full);
         r.put("rejectedRequestsByReason",reasons); r.put("rejectedRequestCount",validation+stopped+full);
-        r.put("droppedPatternStepCount",droppedPatternSteps.get());
         return r;
     }
     @Kroll.method
@@ -88,18 +85,28 @@ public class TiSynthEngineModule extends KrollModule {
     }
     @Kroll.method
     public synchronized void resetStats() {
+        rejectedPublications.set(0);
         for(int i=0;i<3;i++) rejected.set(i,0);
-        droppedPatternSteps.set(0);
         if(synthThread != null) synthThread.statsControl(2);
-        lastStats[4]=0; lastStats[1]=lastStats[0];
+        lastStats[4]=0;lastStats[21]=0; lastStats[1]=lastStats[0];
         if(!Double.isNaN(lastStats[17])) lastStats[17]=0;
         for(int i=6;i<15;i++) lastStats[i]=Double.NaN;
     }
-    private ScheduledExecutorService patternScheduler;
     private final Set<String> warnedKeys = new HashSet<>();
-    private final Object patternLock = new Object();
-    private boolean patternPending;
-    private int patternToken;
+    private final android.os.Handler sequenceEvents = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable sequencePoll = new Runnable() { public void run() {
+        synchronized(TiSynthEngineModule.this) {
+            if(synthThread==null)return;
+            double[] ends=synthThread.sequenceEnds();
+            if(ends!=null)for(int i=0;i+1<ends.length;i+=2) {
+                int id=(int)ends[i];acceptedSequences.remove(id);
+                KrollDict event=new KrollDict();event.put("sequenceId",id);
+                event.put("reason",ends[i+1]==1?"completed":"stopped");fireEvent("sequenceend",event);
+            }
+            sequenceEvents.postDelayed(this,10);
+        }
+    }};
+    private long nextSequenceId=1;
 
     public TiSynthEngineModule() {
         super();
@@ -136,7 +143,9 @@ public class TiSynthEngineModule extends KrollModule {
         defaults.put("panSpread", SynthContract.DEFAULT_PAN_SPREAD);
         defaults.put("bpm", SynthContract.DEFAULT_BPM);
         defaults.put("swing", SynthContract.DEFAULT_SWING);
-        defaults.put("stepDuration", SynthContract.DEFAULT_STEP_DURATION_MS);
+        defaults.put("stepDuration", .25);
+        defaults.put("gate",.8);defaults.put("timeUnit","beats");defaults.put("maxSequences",1);defaults.put("loop",false);
+        defaults.put("bus","effects");defaults.put("priority",0);
         defaults.put("decay", SynthContract.DEFAULT_DECAY_MS);
         defaults.put("sustain", SynthContract.DEFAULT_SUSTAIN);
         defaults.put("filterType", SynthContract.DEFAULT_FILTER_TYPE);
@@ -155,7 +164,7 @@ public class TiSynthEngineModule extends KrollModule {
         limits.put("release", range(RELEASE_MIN_MS, RELEASE_MAX_MS));
         limits.put("volume", range(VOLUME_MIN, VOLUME_MAX));
         limits.put("waveType", range(SynthContract.MIN_WAVE_TYPE, SynthContract.MAX_WAVE_TYPE));
-        limits.put("patternSteps", range(1, PATTERN_MAX_STEPS));
+        limits.put("sequenceSteps", range(1, SEQUENCE_MAX_STEPS));
         limits.put("pan", range(-1.0, 1.0));
         limits.put("spatialX", range(-1.0, 1.0));
         limits.put("spatialY", range(-1.0, 1.0));
@@ -171,7 +180,9 @@ public class TiSynthEngineModule extends KrollModule {
         limits.put("bitDepth", range(0, SynthContract.MAX_BIT_DEPTH));
         limits.put("bpm", range(SynthContract.MIN_BPM, SynthContract.MAX_BPM));
         limits.put("swing", range(SynthContract.MIN_SWING, SynthContract.MAX_SWING));
-        limits.put("stepDuration", range(DURATION_MIN_MS, DURATION_MAX_MS));
+        limits.put("stepDuration", range(9/maxFrequencyHz(),300));
+        limits.put("stepDurationMs",range(1800/maxFrequencyHz(),60000));
+        limits.put("maxSequences",range(1,4));limits.put("priority",range(0,3));limits.put("effectSend",range(0,1));
         limits.put("decay", range(0, SynthContract.MAX_DECAY_MS));
         limits.put("sustain", range(0.0, 1.0));
         limits.put("filterHz", range(SynthContract.MIN_FILTER_HZ, maxFrequencyHz()));
@@ -196,30 +207,31 @@ public class TiSynthEngineModule extends KrollModule {
         result.put("limits", limits);
         result.put("mixingProfiles", new Object[]{"conservative", "raw", "balanced", "speakerSafe"});
         result.put("audioSessions", new Object[]{"playback", "ambient"});
+        result.put("buses",new Object[]{"music","effects","ui","ambience"});
         result.put("filterTypes", SynthContract.FILTER_TYPES.clone());
         result.put("waveTypes", waveTypes);
         return result;
     }
 
     @Kroll.method
-    public synchronized boolean startEngine(KrollDict options) {
-        if (!acceptValidation("startEngine", SynthContract.validateStartEngine(options))) return false;
+    public synchronized boolean start(KrollDict options) {
+        if (!acceptValidation("start", SynthContract.validateStart(options))) return false;
         if (synthThread != null) return true;
-        int maxVoices = readOptionalIntOption(options, "startEngine", "maxVoices",
+        int maxVoices = readOptionalIntOption(options, "start", "maxVoices",
                 SynthContract.DEFAULT_MAX_VOICES, 1, MAX_VOICES_LIMIT);
         int mixingProfile = readMixingProfile(options);
         if (mixingProfile < 0) return false;
-        SynthThread candidate = new SynthThread(maxVoices, mixingProfile);
+        SynthThread candidate = new SynthThread(maxVoices, mixingProfile,readOptionalIntOption(options,"start","maxSequences",1,1,4));
         candidate.statsControl(statsEnabled ? 1 : 0);
         if (!candidate.startAudio()) {
             candidate.requestShutdown();
             return reject(1);
         }
         synthThread = candidate;
-        acceptedSequence=null;acceptedProcessing=null;
+        acceptedSequences.clear();acceptedProcessing=null;rejectedPublications.set(0);
+        sequenceEvents.post(sequencePoll);
         lastStats=emptyStats();
         for(int i=0;i<3;i++) rejected.set(i,0);
-        droppedPatternSteps.set(0);
 
         return true;
     }
@@ -256,11 +268,12 @@ public class TiSynthEngineModule extends KrollModule {
     public synchronized boolean updateVoice(KrollDict options) {
         if(synthThread==null)return reject(1);
         if(!acceptValidation("updateVoice",SynthContract.validateUpdateVoice(options,maxFrequencyHz())))return false;
-        String[] keys={"frequency","volume","filterHz","filterQ","lfoFreq","lfoDepth","pulseWidth","fmRatio","fmDepth"};
+        String[] keys={"frequency","volume","filterHz","filterQ","lfoFreq","lfoDepth","pulseWidth","fmRatio","fmDepth","noiseRate","lowPassHz","pan"};
         double[] values=new double[keys.length]; int mask=0;
         for(int i=0;i<keys.length;i++)if(containsKey(options,keys[i])) {mask|=1<<i; values[i]=((Number)options.get(keys[i])).doubleValue();}
         if(containsKey(options,"note")){mask|=1;values[0]=parseNoteToFrequency((String)options.get("note"));}
         int id=((Number)options.get("voiceId")).intValue(), allowed=synthThread.voiceMask(id);
+        if(allowed>=0&&(containsKey(options,"spatialX")||containsKey(options,"spatialY"))&&(allowed&(1<<16))==0)return reject(0);
         if(allowed>=0 && (mask & ~allowed)!=0)return acceptValidation("updateVoice",SynthContract.Validation.rejected("changes","incompatible_voice_source",options));
         if(options.containsKey("modulations"))try {
             double[] mods=SynthStudioContract.modulations(options.get("modulations"),-1,-1);
@@ -268,8 +281,14 @@ public class TiSynthEngineModule extends KrollModule {
                 int target=(int)mods[i*6+2],bit=target==0?2:target==1?6:8;
                 if((allowed&(1<<bit))==0)return reject(0);
             }
-            values=java.util.Arrays.copyOf(values,21);System.arraycopy(mods,0,values,9,12);
+            values=java.util.Arrays.copyOf(values,24);System.arraycopy(mods,0,values,12,12);
         } catch(IllegalArgumentException e){return reject(0);}
+        // Extra controls are carried in a fixed tail after the modulation packet.
+        values=java.util.Arrays.copyOf(values,28);
+        values[24]=(containsKey(options,"modulations")?2:0)+(containsKey(options,"spatialX")||containsKey(options,"spatialY")?1:0);
+        values[25]=containsKey(options,"spatialX")?((Number)options.get("spatialX")).doubleValue():Double.NaN;
+        values[26]=containsKey(options,"spatialY")?((Number)options.get("spatialY")).doubleValue():Double.NaN;
+        values[27]=containsKey(options,"effectSend")?((Number)options.get("effectSend")).doubleValue():Double.NaN;
         boolean full=synthThread.voiceCommand(6,id,mask,values);
         if(full)reject(2); return !full;
     }
@@ -354,7 +373,7 @@ public class TiSynthEngineModule extends KrollModule {
                 frequency, duration, attack, release, volume,
                 waveType, pan, panEnd, freqEnd, lfoFreq, lfoDepth,
                 noiseRate, noiseRateEnd, lowPassHz, pulseWidth, pulseWidthEnd,
-                bitDepth, waveTable, null, 0, 100, extras);
+                bitDepth, waveTable, extras);
         if (dropped) {
             warnOnce("playTone", "queue", "overflow", "command_queue_full", "drop_newest");
         }
@@ -454,263 +473,49 @@ public class TiSynthEngineModule extends KrollModule {
         if(!synthThread.masterProcessing(next))return reject(2);
         acceptedProcessing=next;return true;
     }
-    private SynthStudioContract.Sequence acceptedSequence;
-    private void cancelPatternForSequence() {
-        if(patternScheduler!=null){patternScheduler.shutdownNow();patternScheduler=null;}
-        boolean ended;
-        synchronized(patternLock){ended=patternPending;patternPending=false;patternToken++;}
-        if(ended)firePatternEnd(false);
-    }
-    @Kroll.method public synchronized boolean playSequence(KrollDict options) {return publishSequence(options,true);}
-    @Kroll.method public synchronized boolean updateSequence(KrollDict options) {return publishSequence(options,false);}
-    private boolean publishSequence(KrollDict options,boolean restart) {
-        if(synthThread==null)return reject(1);
+    private final java.util.Map<Integer,SynthStudioContract.Sequence> acceptedSequences=new java.util.HashMap<>();
+    @Kroll.method public synchronized int playSequence(KrollDict options) {
+        if(synthThread==null){reject(1);return 0;}
+        if(nextSequenceId>Integer.MAX_VALUE){reject(2);return 0;}
         final SynthStudioContract.Sequence next;
-        try {next=SynthStudioContract.sequence(options,acceptedSequence,restart,maxFrequencyHz());}
+        try {next=SynthStudioContract.sequence(options,null,true,maxFrequencyHz());}
+        catch(IllegalArgumentException e){reject(0);return 0;}
+        int id=(int)nextSequenceId++;
+        if(!synthThread.publishSequence(id,next.packet,true)){rejectedPublications.incrementAndGet();reject(2);return 0;}
+        acceptedSequences.put(id,next.acceptedState());return id;
+    }
+    private int sequenceId(KrollDict options) {
+        if(options==null||!(options.get("sequenceId") instanceof Number))return 0;
+        double id=((Number)options.get("sequenceId")).doubleValue();
+        return Double.isFinite(id)&&id>=1&&id<=Integer.MAX_VALUE&&id==Math.rint(id)?(int)id:0;
+    }
+    @Kroll.method public synchronized boolean updateSequence(KrollDict options) {
+        if(synthThread==null)return reject(1);
+        int id=sequenceId(options);if(id==0||!acceptedSequences.containsKey(id)||synthThread.sequenceState(id)==null)return reject(0);
+        java.util.Map<String,Object> changes=new java.util.HashMap<>(options);changes.remove("sequenceId");
+        final SynthStudioContract.Sequence next;
+        try {next=SynthStudioContract.sequence(changes,acceptedSequences.get(id),false,maxFrequencyHz());}
         catch(IllegalArgumentException e){return reject(0);}
-        if(!synthThread.publishSequence(next.packet,restart))return reject(2);
-        acceptedSequence=next;if(restart)cancelPatternForSequence();return true;
+        if(!synthThread.publishSequence(id,next.packet,false)){rejectedPublications.incrementAndGet();return reject(2);}
+        acceptedSequences.put(id,next.acceptedState());return true;
     }
-    @Kroll.method public synchronized boolean stopSequence() {
-        if(synthThread==null)return reject(1);synthThread.stopSequence();return true;
+    @Kroll.method public synchronized boolean stopSequence(KrollDict options) {
+        if(synthThread==null)return reject(1);
+        int id=sequenceId(options);if(id==0||options.size()!=1)return reject(0);
+        return synthThread.stopSequence(id);
     }
-    @Kroll.method public synchronized KrollDict getSequenceState() {
-        double[] v=synthThread==null?null:synthThread.sequenceState();
-        if(v==null)v=new double[]{0,-1,0,120,0};
-        KrollDict state=new KrollDict();state.put("playing",v[0]!=0);state.put("step",(int)v[1]);
+    @Kroll.method public synchronized boolean setTempo(KrollDict options) {
+        if(synthThread==null)return reject(1);
+        try {if(options==null)return reject(0);SynthStudioContract.keys(options,"bpm");
+            if(!options.containsKey("bpm"))return reject(0);
+            return synthThread.setTempo(SynthStudioContract.number(options,"bpm",120,20,300));
+        }catch(IllegalArgumentException e){return reject(0);}
+    }
+    @Kroll.method public synchronized KrollDict getSequenceState(KrollDict options) {
+        int id=sequenceId(options);if(id==0||options.size()!=1)return null;
+        double[] v=synthThread==null?null:synthThread.sequenceState(id);if(v==null)return null;
+        KrollDict state=new KrollDict();state.put("sequenceId",id);state.put("playing",v[0]!=0);state.put("step",(int)v[1]);
         state.put("position",v[2]);state.put("beat",v[2]);state.put("bpm",v[3]);state.put("revision",v[4]);return state;
-    }
-
-    @Kroll.method
-    public synchronized boolean playPattern(KrollDict options) {
-        if (synthThread == null) return reject(1);
-        if (options == null) return reject(0);
-
-        if (!acceptValidation("playPattern",
-                SynthContract.validatePattern(options, maxFrequencyHz()))) return false;
-        synthThread.stopSequence();
-
-        if (patternScheduler != null) {
-            patternScheduler.shutdownNow();
-            patternScheduler = null;
-        }
-
-        Object stepsObj = containsKey(options, "steps") ? options.get("steps") : null;
-        if (!(stepsObj instanceof Object[])) return false;
-        Object[] steps = (Object[]) stepsObj;
-        if (steps.length == 0) return false;
-        int stepCount = Math.min(steps.length, PATTERN_MAX_STEPS);
-        if (steps.length > PATTERN_MAX_STEPS) {
-            warnOnce("playPattern", "steps", "too_many_steps", steps.length,
-                    "truncated_to_" + PATTERN_MAX_STEPS);
-        }
-
-        Double bpmVal  = parseFiniteDouble(containsKey(options, "bpm")
-                ? options.get("bpm") : null);
-        double bpm     = (bpmVal != null) ? clamp(bpmVal, 20.0, 300.0) : 120.0;
-
-        Double swingVal = parseFiniteDouble(containsKey(options, "swing")
-                ? options.get("swing") : null);
-        double swing   = (swingVal != null) ? clamp(swingVal, -0.49, 0.49) : 0.0;
-
-        double quarter = 60000.0 / bpm;
-        double maxFreq = maxFrequencyHz();
-
-        Object globalNoteValue = containsKey(options, "noteValue")
-                ? options.get("noteValue") : null;
-        Double globalStepDuration = parseFiniteDouble(containsKey(options, "stepDuration")
-                ? options.get("stepDuration") : null);
-        int globalAttack = readOptionalIntOption(options, "playPattern", "attack",
-                ATTACK_DEFAULT_MS, ATTACK_MIN_MS, ATTACK_MAX_MS);
-        int globalRelease = readOptionalIntOption(options, "playPattern", "release",
-                RELEASE_DEFAULT_MS, RELEASE_MIN_MS, RELEASE_MAX_MS);
-        double globalVolume = readOptionalDoubleOption(options, "playPattern", "volume",
-                VOLUME_DEFAULT, VOLUME_MIN, VOLUME_MAX);
-        int globalWaveType = readOptionalIntOption(options, "playPattern", "waveType", 0, 0,
-                SynthContract.MAX_WAVE_TYPE);
-        double globalPan = readOptionalDoubleOption(options, "playPattern", "pan", 0.0, -1.0, 1.0);
-        double globalPanEnd = readOptionalDoubleOption(options, "playPattern", "panEnd",
-                globalPan, -1.0, 1.0);
-        double globalFrequencyEnd = readOptionalDoubleOption(options, "playPattern", "frequencyEnd",
-                0.0, 0.0, maxFreq);
-        double globalLfoFreq = readOptionalDoubleOption(options, "playPattern", "lfoFreq",
-                0.0, 0.0, 20000.0);
-        double globalLfoDepth = readOptionalDoubleOption(options, "playPattern", "lfoDepth",
-                0.0, 0.0, 20000.0);
-        double globalNoiseRate = readOptionalDoubleOption(options, "playPattern", "noiseRate",
-                0.0, 0.0, maxFreq);
-        double globalNoiseRateEnd = readOptionalDoubleOption(options, "playPattern", "noiseRateEnd",
-                0.0, 0.0, maxFreq);
-        double globalLowPassHz = readOptionalDoubleOption(options, "playPattern", "lowPassHz",
-                0.0, 0.0, maxFreq);
-        double globalPulseWidth = readOptionalDoubleOption(options, "playPattern", "pulseWidth",
-                SynthContract.DEFAULT_PULSE_WIDTH, SynthContract.MIN_PULSE_WIDTH,
-                SynthContract.MAX_PULSE_WIDTH);
-        double globalPulseWidthEnd = readOptionalDoubleOption(options, "playPattern", "pulseWidthEnd",
-                0.0, 0.0, SynthContract.MAX_PULSE_WIDTH);
-        int globalBitDepth = readOptionalIntOption(options, "playPattern", "bitDepth",
-                0, 0, SynthContract.MAX_BIT_DEPTH);
-        double[] globalWaveTable = parseWaveTable(options);
-        double[] globalExtras = readExtras(options, defaultExtras());
-        double globalDetune = readOptionalDoubleOption(options, "playPattern", "detune",
-                0.0, -SynthContract.MAX_DETUNE_CENTS, SynthContract.MAX_DETUNE_CENTS);
-
-        final SynthThread patternEngine = synthThread;
-        final int patternId;
-        final boolean replaced;
-        synchronized (patternLock) {
-            replaced = patternPending;
-            patternPending = true;
-            patternId = ++patternToken;
-        }
-        if (replaced) firePatternEnd(false);
-
-        patternScheduler = Executors.newSingleThreadScheduledExecutor();
-        final ScheduledExecutorService scheduler = patternScheduler;
-
-        double cumulativeMs = 0.0;
-        for (int i = 0; i < stepCount; i++) {
-            KrollDict step = normalizePatternStep(steps[i]);
-            if (step == null) continue;
-
-            double stepMs = resolvePatternStepMs(
-                    step, globalNoteValue, globalStepDuration, quarter);
-            stepMs = clamp(stepMs, DURATION_MIN_MS, DURATION_MAX_MS);
-
-            // Swing: even steps lean late, odd steps lean early
-            double swingOffsetMs = 0.0;
-            if (swing != 0.0) {
-                swingOffsetMs = (i % 2 == 0) ? swing * stepMs : -swing * stepMs;
-            }
-
-            // Resolve pitch
-            double  freq   = 0.0;
-            boolean isRest = true;
-            boolean explicitRest = containsKey(step, "rest")
-                    && Boolean.TRUE.equals(step.get("rest"));
-            if (!explicitRest && containsKey(step, "frequency")) {
-                Double fv = parseFiniteDouble(step.get("frequency"));
-                if (fv != null && fv >= MIN_FREQUENCY_HZ) {
-                    freq   = clamp(fv, MIN_FREQUENCY_HZ, maxFreq);
-                    isRest = false;
-                }
-            } else if (!explicitRest && containsKey(step, "note")) {
-                Object noteObj = step.get("note");
-                if (noteObj != null) {
-                    double f = parseNoteToFrequency(noteObj.toString());
-                    if (f >= MIN_FREQUENCY_HZ) {
-                        freq   = clamp(f, MIN_FREQUENCY_HZ, maxFreq);
-                        isRest = false;
-                    }
-                }
-            }
-
-            if (!isRest) {
-                int dur = (int) Math.round(stepMs);
-                int    attack  = readOptionalIntOption(step, "step", "attack",
-                        globalAttack, ATTACK_MIN_MS, ATTACK_MAX_MS);
-                int    release = readOptionalIntOption(step, "step", "release",
-                        globalRelease, RELEASE_MIN_MS, RELEASE_MAX_MS);
-                double vol = readOptionalDoubleOption(step, "step", "volume",
-                        globalVolume, VOLUME_MIN, VOLUME_MAX);
-                int wt = readOptionalIntOption(step, "step", "waveType", globalWaveType, 0,
-                        SynthContract.MAX_WAVE_TYPE);
-                double pan = readOptionalDoubleOption(step, "step", "pan",
-                        globalPan, -1.0, 1.0);
-                double panEnd = readOptionalDoubleOption(step, "step", "panEnd",
-                        globalPanEnd, -1.0, 1.0);
-                double frequencyEnd = readOptionalDoubleOption(step, "step", "frequencyEnd",
-                        globalFrequencyEnd, 0.0, maxFreq);
-                double lfoFreq = readOptionalDoubleOption(step, "step", "lfoFreq",
-                        globalLfoFreq, 0.0, 20000.0);
-                double lfoDepth = readOptionalDoubleOption(step, "step", "lfoDepth",
-                        globalLfoDepth, 0.0, 20000.0);
-                double noiseRate = readOptionalDoubleOption(step, "step", "noiseRate",
-                        globalNoiseRate, 0.0, maxFreq);
-                double noiseRateEnd = readOptionalDoubleOption(step, "step", "noiseRateEnd",
-                        globalNoiseRateEnd, 0.0, maxFreq);
-                double lowPassHz = readOptionalDoubleOption(step, "step", "lowPassHz",
-                        globalLowPassHz, 0.0, maxFreq);
-                double pulseWidth = readOptionalDoubleOption(step, "step", "pulseWidth",
-                        globalPulseWidth, SynthContract.MIN_PULSE_WIDTH,
-                        SynthContract.MAX_PULSE_WIDTH);
-                double pulseWidthEnd = readOptionalDoubleOption(step, "step", "pulseWidthEnd",
-                        globalPulseWidthEnd, 0.0, SynthContract.MAX_PULSE_WIDTH);
-                int bitDepth = readOptionalIntOption(step, "step", "bitDepth",
-                        globalBitDepth, 0, SynthContract.MAX_BIT_DEPTH);
-                double[] waveTable = containsKey(step, "waveTable")
-                        ? parseWaveTable(step) : globalWaveTable;
-                double[] stepExtras = readExtras(step, globalExtras);
-                double stepDetune = readOptionalDoubleOption(step, "step", "detune",
-                        globalDetune, -SynthContract.MAX_DETUNE_CENTS,
-                        SynthContract.MAX_DETUNE_CENTS);
-                if (stepDetune != 0.0) {
-                    double ratio = detuneRatio(stepDetune);
-                    freq = clamp(freq * ratio, MIN_FREQUENCY_HZ, maxFreq);
-                    if (frequencyEnd >= MIN_FREQUENCY_HZ) {
-                        frequencyEnd = clamp(frequencyEnd * ratio, MIN_FREQUENCY_HZ, maxFreq);
-                    }
-                }
-
-                if (attack >= dur) attack = Math.max(0, dur - 1);
-                int maxRel = Math.max(0, dur - attack);
-                if (release > maxRel) release = maxRel;
-
-                final double  ff = freq;
-                final int     fd = dur;
-                final int     fa = attack;
-                final int     fr = release;
-                final double  fv = vol;
-                final int     fw = wt;
-                final double  fp = pan;
-                final double  fpe = panEnd;
-                final double  ffe = frequencyEnd;
-                final double  flf = lfoFreq;
-                final double  fld = lfoDepth;
-                final double  fnr = noiseRate;
-                final double  fnre = noiseRateEnd;
-                final double  flp = lowPassHz;
-                final double  fpw = pulseWidth;
-                final double  fpwe = pulseWidthEnd;
-                final int     fbd = bitDepth;
-                final double[] fwt = waveTable;
-                final double[] fex = stepExtras;
-
-                long schedMs = Math.round(cumulativeMs + swingOffsetMs);
-                if (schedMs < 0) schedMs = 0;
-
-                scheduler.schedule(() -> {
-                  synchronized (TiSynthEngineModule.this) {
-                    if (synthThread == patternEngine && patternToken == patternId) {
-                        boolean dropped = synthThread.enqueueNote(ff, fd, fa, fr, fv,
-                                fw, fp, fpe, ffe, flf, fld, fnr, fnre, flp,
-                                fpw, fpwe, fbd, fwt, null, 0, 100, fex);
-                        if (dropped) {
-                            droppedPatternSteps.incrementAndGet();
-                            warnOnce("playPattern", "queue", "overflow",
-                                    "command_queue_full", "drop_newest");
-                        }
-                    }
-                  }
-                }, schedMs, TimeUnit.MILLISECONDS);
-            }
-
-            cumulativeMs += stepMs;
-        }
-
-        long shutdownDelayMs = Math.max(1L, (long) Math.ceil(cumulativeMs) + 1L);
-        scheduler.schedule(() -> {
-          synchronized (TiSynthEngineModule.this) {
-            boolean completed;
-            synchronized (patternLock) {
-                completed = patternPending && patternToken == patternId;
-                if (completed) patternPending = false;
-            }
-            if (completed) firePatternEnd(true);
-            scheduler.shutdown();
-          }
-        }, shutdownDelayMs, TimeUnit.MILLISECONDS);
-        return true;
     }
 
     @Kroll.method
@@ -724,14 +529,7 @@ public class TiSynthEngineModule extends KrollModule {
 
     @Kroll.method
     public synchronized void shutdown() {
-        if (patternScheduler != null) {
-            patternScheduler.shutdownNow();
-            patternScheduler = null;
-        }
-        synchronized (patternLock) {
-            patternPending = false;
-            patternToken++;
-        }
+        sequenceEvents.removeCallbacks(sequencePoll);
         if (synthThread == null) return;
         lastStats=synthThread.stopAndGetStats();
         boolean dropped = synthThread.requestShutdown();
@@ -742,34 +540,6 @@ public class TiSynthEngineModule extends KrollModule {
             warnOnce("shutdown", "queue", "overflow", "command_queue_full", "fallback_control_flag");
         }
         synthThread = null;
-    }
-
-    @SuppressWarnings("unchecked")
-    private KrollDict normalizePatternStep(Object rawStep) {
-        if (rawStep instanceof KrollDict) return (KrollDict) rawStep;
-        if (rawStep instanceof java.util.HashMap) {
-            return new KrollDict((java.util.HashMap<String, Object>) rawStep);
-        }
-
-        return null;
-    }
-
-    private double resolvePatternStepMs(KrollDict step, Object globalNoteValue,
-            Double globalStepDuration, double quarterMs) {
-        if (containsKey(step, "duration")) {
-            Double value = parseFiniteDouble(step.get("duration"));
-            if (value != null && value > 0.0) return value;
-        }
-        if (containsKey(step, "noteValue") && step.get("noteValue") != null) {
-            return computeNoteValueMs(step.get("noteValue").toString(), quarterMs);
-        }
-        if (globalNoteValue != null) {
-            return computeNoteValueMs(globalNoteValue.toString(), quarterMs);
-        }
-        if (globalStepDuration != null && globalStepDuration > 0.0) {
-            return globalStepDuration;
-        }
-        return 100.0;
     }
 
     // -------------------------------------------------------------------------
@@ -830,22 +600,7 @@ public class TiSynthEngineModule extends KrollModule {
     // -------------------------------------------------------------------------
     // Note value → duration in milliseconds
     // -------------------------------------------------------------------------
-    private static double computeNoteValueMs(String nv, double quarterMs) {
-        if (nv == null) return quarterMs;
-        switch (nv) {
-            case "1n":   return quarterMs * 4.0;
-            case "2n":   return quarterMs * 2.0;
-            case "2n.":  return quarterMs * 3.0;
-            case "4n":   return quarterMs;
-            case "4n.":  return quarterMs * 1.5;
-            case "8n":   return quarterMs * 0.5;
-            case "8n.":  return quarterMs * 0.75;
-            case "8t":   return quarterMs / 3.0;
-            case "16n":  return quarterMs * 0.25;
-            case "16t":  return quarterMs / 6.0;
-            default:     return quarterMs;
-        }
-    }
+
 
     // -------------------------------------------------------------------------
     // Frequency array parser (from "frequencies" or "notes" key in dict)
@@ -905,12 +660,6 @@ public class TiSynthEngineModule extends KrollModule {
     // Helpers
     // -------------------------------------------------------------------------
 
-    private void firePatternEnd(boolean completed) {
-        KrollDict event = new KrollDict();
-        event.put("completed", completed);
-        fireEvent("patternend", event);
-    }
-
     private static double detuneRatio(double cents) {
         return Math.pow(2.0, cents / 1200.0);
     }
@@ -949,6 +698,9 @@ public class TiSynthEngineModule extends KrollModule {
             extras[SynthThread.EXTRA_FILTER_TYPE] =
                     SynthContract.filterTypeIndex((String) options.get("filterType"));
         }
+        extras[25]=SynthStudioContract.bus(options.getOrDefault("bus","effects"));
+        extras[26]=containsKey(options,"effectSend")?((Number)options.get("effectSend")).doubleValue():-1;
+        extras[27]=containsKey(options,"priority")?((Number)options.get("priority")).doubleValue():0;
         return extras;
     }
 
@@ -969,7 +721,7 @@ public class TiSynthEngineModule extends KrollModule {
 
         Object rawValue = options.get("mixingProfile");
         if (!(rawValue instanceof String)) {
-            warnOnce("startEngine", "mixingProfile", "not_string",
+            warnOnce("start", "mixingProfile", "not_string",
                     rawValue, "engine_not_started");
             return -1;
         }
@@ -986,7 +738,7 @@ public class TiSynthEngineModule extends KrollModule {
             return SynthDsp.MIXING_PROFILE_SPEAKER_SAFE;
         }
 
-        warnOnce("startEngine", "mixingProfile", "unsupported_value",
+        warnOnce("start", "mixingProfile", "unsupported_value",
                 rawValue, "engine_not_started");
         return -1;
     }

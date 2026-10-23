@@ -4,14 +4,13 @@
 
 @interface TiSynthengineContract : NSObject
 
-+ (NSDictionary *)validateStartEngine:(NSDictionary *)options;
++ (NSDictionary *)validateStart:(NSDictionary *)options;
 + (NSDictionary *)validateSetVolume:(NSDictionary *)options;
 + (NSDictionary *)validateNoteOn:(NSDictionary *)options maxFrequency:(double)maxFrequency;
 + (NSDictionary *)validateNoteOff:(NSDictionary *)options;
 + (NSDictionary *)validateUpdateVoice:(NSDictionary *)options maxFrequency:(double)maxFrequency;
 + (NSDictionary *)validateTone:(NSDictionary *)options maxFrequency:(double)maxFrequency;
 + (NSDictionary *)validateChord:(NSDictionary *)options maxFrequency:(double)maxFrequency;
-+ (NSDictionary *)validatePattern:(NSDictionary *)options maxFrequency:(double)maxFrequency;
 + (NSDictionary *)defaultsWithMaxFrequency:(double)maxFrequency;
 
 + (NSDictionary *)sequenceStateObject:(const SynthSequenceState *)state;

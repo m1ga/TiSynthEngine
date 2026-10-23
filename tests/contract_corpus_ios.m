@@ -47,8 +47,8 @@ int main(void)
         failure = [TiSynthengineContract validateTone:options maxFrequency:maxFrequency];
       } else if ([method isEqualToString:@"playChord"]) {
         failure = [TiSynthengineContract validateChord:options maxFrequency:maxFrequency];
-      } else if ([method isEqualToString:@"playPattern"]) {
-        failure = [TiSynthengineContract validatePattern:options maxFrequency:maxFrequency];
+      } else if ([method isEqualToString:@"start"]) {
+        failure = [TiSynthengineContract validateStart:options];
       } else {
         fprintf(stderr, "line %ld: unknown method %s\n", (long)lineNumber, method.UTF8String);
         return 2;

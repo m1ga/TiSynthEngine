@@ -7,7 +7,7 @@ static SynthSequenceTransport transport;
 static SynthSequenceConfig *start(double rate,int count,int mode) {
  synth_sequence_init(&transport,rate);
  SynthSequenceConfig *c=synth_sequence_begin_write(&transport);assert(c);
- c->stepCount=count;c->mode=mode;
+ c->stepCount=count;c->mode=mode;c->loop=1;
  for(int i=0;i<count;i++){c->steps[i].noteCount=1;c->steps[i].notes[0]=(uint8_t)(69+i);c->steps[i].gate=.5;}
  assert(synth_sequence_commit(&transport,c,1));synth_sequence_begin_block(&transport);return c;
 }

@@ -10,23 +10,28 @@
 #define SYNTH_SEQUENCE_MAX_NOTES 32
 #define SYNTH_SEQUENCE_BANKS 3
 
+enum { SYNTH_SEQUENCE_BEATS, SYNTH_SEQUENCE_MS };
 enum { SYNTH_SEQUENCE_NORMAL, SYNTH_SEQUENCE_UP, SYNTH_SEQUENCE_DOWN, SYNTH_SEQUENCE_UPDOWN };
 typedef struct {
  double volume,pan,frequencyEnd,lfoFreq,lfoDepth,noiseRate,lowPassHz,pulseWidth;
  double filterHz,filterQ,fmRatio,fmDepth,spatialX,spatialY,sustain;
  double wavetable[64],mods[12];
+ double noiseRateEnd,panEnd,pulseWidthEnd,filterHzEnd,fmDepthEnd,effectSend;
+ int fmDepthSweep,bus,priority;
  int waveType,attack,decay,release,filterType,bitDepth,spatial,wavetableSize;
 } SynthSequenceVoice;
 typedef struct {
  uint8_t notes[SYNTH_SEQUENCE_MAX_NOTES];
  int noteCount,rest;
- double gate;
+ double gate,duration,length;
+ double frequencies[SYNTH_SEQUENCE_MAX_NOTES],preparedFrequencies[SYNTH_SEQUENCE_MAX_NOTES];
  SynthSequenceVoice voice;
 } SynthSequenceStep;
 typedef struct {
  SynthSequenceStep steps[SYNTH_SEQUENCE_MAX_STEPS];
  int stepCount,mode,loop;
- double bpm,swing,tuning,detune;
+ double bpm,swing,tuning,detune,stepDuration;
+ int timeUnit;
  uint32_t revision;
  /* Prepared by the producer, never sorted in the callback. */
  int order[SYNTH_SEQUENCE_MAX_STEPS],orderCount;
@@ -40,7 +45,9 @@ typedef struct {
 typedef struct {
  int stepIndex,noteCount,bank;
  uint8_t notes[SYNTH_SEQUENCE_MAX_NOTES];
- double gateEndBeat;
+ double gateEndBeat,length;
+ double frequencies[SYNTH_SEQUENCE_MAX_NOTES];
+ uint32_t sequenceId;
  uint64_t generation;
 } SynthSequenceEvent;
 typedef struct {
@@ -49,7 +56,7 @@ typedef struct {
  uint32_t mailbox,stopRequested,controlSerial,lastRestartSerial;
  int latest,active,pending,pendingRestart;
  uint32_t nextRevision;
- double sampleRate,beat,nextBeat,bpm,swing,beatCompensation;
+ double sampleRate,beat,nextBeat,bpm,swing,beatCompensation,pairShift;
  int playing,cursor,pairIndex,lastStep;
  uint64_t generation;
  /* Atomic scalar snapshot avoids C/C++ data races in state readers. */
@@ -57,8 +64,9 @@ typedef struct {
  uint64_t snapshotBeat __attribute__((aligned(8))),snapshotBpm,snapshotGeneration;
 } SynthSequenceTransport;
 static inline void synth_sequence_defaults(SynthSequenceConfig *c) {
- memset(c,0,sizeof(*c));c->bpm=120;c->tuning=440;c->loop=1;
+ memset(c,0,sizeof(*c));c->bpm=120;c->tuning=440;c->stepDuration=.25;c->loop=0;
  for(int i=0;i<SYNTH_SEQUENCE_MAX_STEPS;i++) {
+  c->steps[i].voice.effectSend=-1;c->steps[i].voice.bus=1;
   c->steps[i].gate=.8;c->steps[i].voice.volume=1;c->steps[i].voice.pulseWidth=.5;
   c->steps[i].voice.sustain=1;c->steps[i].voice.filterHz=1000;
   c->steps[i].voice.filterQ=.7071;c->steps[i].voice.fmRatio=1;
@@ -89,19 +97,25 @@ static inline void synth_sequence_cancel_write(SynthSequenceTransport *t,SynthSe
 }
 static inline int synth_sequence_prepare(SynthSequenceConfig *c) {
  if(c->stepCount<1||c->stepCount>512||c->mode<0||c->mode>3||
+    c->timeUnit<0||c->timeUnit>1||!isfinite(c->stepDuration)||c->stepDuration<=0||
     !isfinite(c->bpm)||c->bpm<20||c->bpm>300||!isfinite(c->swing)||c->swing<-.75||c->swing>.75||
     !isfinite(c->tuning)||c->tuning<220||c->tuning>880||!isfinite(c->detune)||fabs(c->detune)>1200) return 0;
  c->orderCount=0;
  for(int i=0;i<c->stepCount;i++) {
   SynthSequenceStep *s=&c->steps[i];
   if(!isfinite(s->gate)||s->gate<.01||s->gate>1||s->noteCount<0||s->noteCount>32||(!s->rest&&!s->noteCount)) return 0;
-  for(int n=0;n<s->noteCount;n++) if(s->notes[n]<12||s->notes[n]>119) return 0;
+  if(!isfinite(s->duration)||s->duration<0||!isfinite(s->length)||s->length<0) return 0;
+  for(int n=0;n<s->noteCount;n++) {
+   if(!isfinite(s->frequencies[n])||s->frequencies[n]<0) return 0;
+   if(s->frequencies[n]==0&&(s->notes[n]<12||s->notes[n]>119)) return 0;
+   s->preparedFrequencies[n]=s->frequencies[n]>0?s->frequencies[n]:c->tuning*pow(2.0,((double)s->notes[n]-69+c->detune/100)/12);
+  }
   if(c->mode==SYNTH_SEQUENCE_NORMAL||(!s->rest&&s->noteCount)) c->order[c->orderCount++]=i;
  }
  if(c->mode!=SYNTH_SEQUENCE_NORMAL) {
   for(int i=1;i<c->orderCount;i++) {
    int item=c->order[i],j=i;
-   while(j>0&&c->steps[c->order[j-1]].notes[0]>c->steps[item].notes[0]) {c->order[j]=c->order[j-1];j--;}
+   while(j>0&&c->steps[c->order[j-1]].preparedFrequencies[0]>c->steps[item].preparedFrequencies[0]) {c->order[j]=c->order[j-1];j--;}
    c->order[j]=item;
   }
   if(c->mode==SYNTH_SEQUENCE_DOWN) for(int i=0;i<c->orderCount/2;i++) {
@@ -114,6 +128,13 @@ static inline int synth_sequence_prepare(SynthSequenceConfig *c) {
 static inline int synth_sequence_commit(SynthSequenceTransport *t,SynthSequenceConfig *c,int restart) {
  int i=synth_sequence_bank_index(t,c);
  if(i<0||!synth_sequence_prepare(c)) {if(i>=0)synth_sequence_cancel_write(t,c);return 0;}
+ if(!restart&&t->latest>=0&&c->timeUnit!=t->banks[t->latest].timeUnit) {synth_sequence_cancel_write(t,c);return 0;}
+ /* Four samples at the fastest musical tempo leave at least one sample
+  * after the largest swing displacement. Sub-sample scores cannot satisfy
+  * the one-sample scheduling bound and are rejected atomically. */
+ double minimum=(c->timeUnit==SYNTH_SEQUENCE_MS?4000:20)/t->sampleRate;
+ if(c->stepDuration<minimum) {synth_sequence_cancel_write(t,c);return 0;}
+ for(int n=0;n<c->stepCount;n++)if(c->steps[n].duration>0&&c->steps[n].duration<minimum) {synth_sequence_cancel_write(t,c);return 0;}
  c->revision=t->nextRevision+1;
  uint32_t serial=(__atomic_add_fetch(&t->controlSerial,1,__ATOMIC_RELAXED)&0x0fffffffu);
  if(!serial)serial=(__atomic_add_fetch(&t->controlSerial,1,__ATOMIC_RELAXED)&0x0fffffffu);
@@ -154,11 +175,15 @@ static inline SynthSequenceState synth_sequence_state(const SynthSequenceTranspo
 }
 static inline void synth_sequence_apply_pending(SynthSequenceTransport *t) {
  if(t->pending<0)return;
- int old=t->active;t->active=t->pending;t->pending=-1;
+ int old=t->active;
+ if(!t->pendingRestart&&old>=0&&t->banks[old].timeUnit!=t->banks[t->pending].timeUnit) {
+  __atomic_store_n(&t->bankState[t->pending],0,__ATOMIC_RELEASE);t->pending=-1;return;
+ }
+ t->active=t->pending;t->pending=-1;
  if(old>=0)__atomic_store_n(&t->bankState[old],0,__ATOMIC_RELEASE);
  if(t->pendingRestart) {
   t->beat=t->nextBeat=t->beatCompensation=0;t->cursor=t->pairIndex=0;t->playing=1;t->lastStep=-1;t->generation++;
-  t->swing=t->banks[t->active].swing;
+  t->swing=t->banks[t->active].swing;t->pairShift=0;
  }
  t->pendingRestart=0;
 }
@@ -181,26 +206,52 @@ static inline void synth_sequence_begin_block(SynthSequenceTransport *t) {
  * gateEndBeat is compared with t->beat, preserving gate position across BPM edits. */
 static inline int synth_sequence_tick(SynthSequenceTransport *t,SynthSequenceEvent *event) {
  if(!t->playing||t->beat+1e-10<t->nextBeat)return 0;
+ int previousPeriod=0;
+ if(t->active>=0) {
+  const SynthSequenceConfig *previous=&t->banks[t->active];
+  previousPeriod=previous->mode==SYNTH_SEQUENCE_UPDOWN&&previous->orderCount>1?2*previous->orderCount-2:previous->orderCount;
+ }
  synth_sequence_apply_pending(t);
  SynthSequenceConfig *c=&t->banks[t->active];
  int count=c->orderCount;
  int period=(c->mode==SYNTH_SEQUENCE_UPDOWN&&count>1)?2*count-2:count;
- if(period==0||(!c->loop&&t->cursor>=period)) {t->playing=0;t->generation++;return 0;}
+ /* A shrink can move an outstanding next step into the new traversal.
+  * A cursor already at the old end must still complete, even if an edit
+  * arrived after its final attack. Harmless edits cannot extend a score. */
+ if(period>0&&period<previousPeriod&&t->cursor>=period&&t->cursor<previousPeriod)t->cursor%=period;
+ if(period==0||(!c->loop&&t->cursor>=period)) {t->playing=0;return 0;}
  if(t->cursor>=period)t->cursor%=period;
  int pos=t->cursor;
  if(c->mode==SYNTH_SEQUENCE_UPDOWN&&pos>=count)pos=period-pos;
  int index=c->order[pos];SynthSequenceStep *s=&c->steps[index];
- if(!(t->pairIndex&1))t->swing=c->swing;
- double length=.25*(1+((t->pairIndex&1)?-t->swing:t->swing));
+ double interval=s->duration>0?s->duration:c->stepDuration;
+ if(!(t->pairIndex&1)) {
+  t->swing=c->swing;
+  int nextCursor=t->cursor+1;
+  if(nextCursor>=period)nextCursor=c->loop?0:-1;
+  double other=interval;
+  if(nextCursor>=0) {
+   int nextPos=nextCursor;
+   if(c->mode==SYNTH_SEQUENCE_UPDOWN&&nextPos>=count)nextPos=period-nextPos;
+   SynthSequenceStep *next=&c->steps[c->order[nextPos]];
+   other=next->duration>0?next->duration:c->stepDuration;
+  }
+  t->pairShift=t->swing*fmin(interval,other);
+ }
+ double length=interval+((t->pairIndex&1)?-t->pairShift:t->pairShift);
+ /* Structural edits can shorten the second interval mid-pair. */
+ if(length<=0)length=interval*.25;
  memset(event,0,sizeof(*event));event->stepIndex=index;event->bank=t->active;
  event->noteCount=s->rest?0:s->noteCount;memcpy(event->notes,s->notes,sizeof(event->notes));
- event->gateEndBeat=t->nextBeat+length*s->gate;event->generation=t->generation;
+ for(int n=0;n<event->noteCount;n++)event->frequencies[n]=s->preparedFrequencies[n];
+ event->length=s->length>0?s->length:length*s->gate;
+ event->gateEndBeat=t->nextBeat+event->length;event->generation=t->generation;
  t->lastStep=index;t->nextBeat+=length;t->cursor++;t->pairIndex++;
  return 1;
 }
 static inline void synth_sequence_advance_sample(SynthSequenceTransport *t) {
  if(t->playing) {
-  double increment=t->bpm/(60*t->sampleRate)-t->beatCompensation;
+  double increment=(t->active>=0&&t->banks[t->active].timeUnit==SYNTH_SEQUENCE_MS?1000/t->sampleRate:t->bpm/(60*t->sampleRate))-t->beatCompensation;
   double next=t->beat+increment;
   t->beatCompensation=(next-t->beat)-increment;t->beat=next;
  }

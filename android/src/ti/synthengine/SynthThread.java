@@ -20,12 +20,12 @@ public final class SynthThread extends Thread {
     static final int EXTRA_SPATIAL_X = 10;
     static final int EXTRA_SPATIAL_Y = 11;
     static final int EXTRA_VOICE_ID = 12;
-    static final int EXTRA_COUNT = 25;
+    static final int EXTRA_COUNT = 28;
 
     private long nativeHandle;
 
-    public SynthThread(int requestedMaxVoices, int mixingProfile) {
-        nativeHandle = nativeCreate(requestedMaxVoices, mixingProfile);
+    public SynthThread(int requestedMaxVoices, int mixingProfile, int maxSequences) {
+        nativeHandle = nativeCreate(requestedMaxVoices, mixingProfile,maxSequences);
     }
 
     public synchronized int getSampleRate() {
@@ -44,13 +44,13 @@ public final class SynthThread extends Thread {
             double lfoFreq, double lfoDepth,
             double noiseRate, double noiseRateEnd, double lowPassHz,
             double pulseWidth, double pulseWidthEnd, int bitDepth, double[] waveTable,
-            double[] seqFreqs, int seqStepCount, int seqStepDurMs, double[] extras) {
+            double[] extras) {
         long handle = nativeHandle;
         return handle == 0 || nativeEnqueueNote(handle, frequency, durationMs,
                 attackMs, releaseMs, volume, waveType, pan, panEnd, freqEnd,
                 lfoFreq, lfoDepth, noiseRate, noiseRateEnd, lowPassHz,
                 pulseWidth, pulseWidthEnd, bitDepth, waveTable,
-                seqFreqs, seqStepCount, seqStepDurMs, extras);
+                extras);
     }
 
     public synchronized boolean enqueueChord(
@@ -74,14 +74,18 @@ public final class SynthThread extends Thread {
     public synchronized boolean masterProcessing(double[] packet) {return nativeHandle!=0 && nativeMasterProcessing(nativeHandle,packet);}
     private static native boolean nativeMasterProcessing(long handle,double[] packet);
 
-    public synchronized boolean publishSequence(double[] packet,boolean restart) {
-        return nativeHandle!=0 && nativePublishSequence(nativeHandle,packet,restart);
+    public synchronized boolean publishSequence(int id,double[] packet,boolean restart) {
+        return nativeHandle!=0 && nativePublishSequence(nativeHandle,id,packet,restart);
     }
-    public synchronized void stopSequence() {if(nativeHandle!=0)nativeStopSequence(nativeHandle);}
-    public synchronized double[] sequenceState() {return nativeHandle==0?null:nativeSequenceState(nativeHandle);}
-    private static native boolean nativePublishSequence(long handle,double[] packet,boolean restart);
-    private static native void nativeStopSequence(long handle);
-    private static native double[] nativeSequenceState(long handle);
+    public synchronized boolean stopSequence(int id) {return nativeHandle!=0&&nativeStopSequence(nativeHandle,id);}
+    public synchronized double[] sequenceState(int id) {return nativeHandle==0?null:nativeSequenceState(nativeHandle,id);}
+    public synchronized double[] sequenceEnds() {return nativeHandle==0?null:nativeSequenceEnds(nativeHandle);}
+    public synchronized boolean setTempo(double bpm) {return nativeHandle!=0&&nativeSetTempo(nativeHandle,bpm);}
+    private static native boolean nativePublishSequence(long handle,int id,double[] packet,boolean restart);
+    private static native boolean nativeStopSequence(long handle,int id);
+    private static native double[] nativeSequenceState(long handle,int id);
+    private static native double[] nativeSequenceEnds(long handle);
+    private static native boolean nativeSetTempo(long handle,double bpm);
 
     public synchronized boolean requestStopAll() {
         long handle = nativeHandle;
@@ -113,7 +117,7 @@ public final class SynthThread extends Thread {
     public synchronized void statsControl(int operation) { if(nativeHandle != 0) nativeStatsControl(nativeHandle, operation); }
     private static native double[] nativeGetStats(long handle);
     private static native void nativeStatsControl(long handle, int operation);
-    private static native long nativeCreate(int maxVoices, int mixingProfile);
+    private static native long nativeCreate(int maxVoices, int mixingProfile,int maxSequences);
     private static native int nativeGetSampleRate(long handle);
     private static native boolean nativeStart(long handle);
     private static native void nativeSetMasterVolume(long handle, double volume);
@@ -122,7 +126,7 @@ public final class SynthThread extends Thread {
             double pan, double panEnd, double freqEnd, double lfoFreq, double lfoDepth,
             double noiseRate, double noiseRateEnd, double lowPassHz,
             double pulseWidth, double pulseWidthEnd, int bitDepth, double[] waveTable,
-            double[] seqFreqs, int seqStepCount, int seqStepDurMs, double[] extras);
+            double[] extras);
     private static native boolean nativeEnqueueChord(long handle, double[] frequencies,
             int durationMs, int attackMs, int releaseMs, double volume, int waveType,
             double[] pans, double noiseRate, double lowPassHz, double pulseWidth,

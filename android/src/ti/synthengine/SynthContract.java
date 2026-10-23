@@ -53,11 +53,11 @@ final class SynthContract {
     static final double MAX_PULSE_WIDTH = 0.95;
     static final int MIN_BIT_DEPTH = 2;
     static final int MAX_BIT_DEPTH = 16;
-    static final int MAX_PATTERN_STEPS = 512;
+    static final int MAX_SEQUENCE_STEPS = 512;
     static final double MIN_BPM = 20.0;
     static final double MAX_BPM = 300.0;
-    static final double MIN_SWING = -0.49;
-    static final double MAX_SWING = 0.49;
+    static final double MIN_SWING = -0.75;
+    static final double MAX_SWING = 0.75;
     static final double MAX_LFO = 20000.0;
 
     static final int DEFAULT_DECAY_MS = 0;
@@ -102,14 +102,15 @@ final class SynthContract {
 
     private SynthContract() {}
 
-    static Validation validateStartEngine(Map<String, Object> options) {
+    static Validation validateStart(Map<String, Object> options) {
         Validation result = rejectUnknownOptions(options, "maxVoices", "mixingProfile",
-                "audioSession");
+                "audioSession", "maxSequences");
         if (!result.accepted) return result;
         result = optionalInteger(options, "maxVoices",
                 MIN_MAX_VOICES, MAX_MAX_VOICES);
         if (!result.accepted) return result;
 
+        result=optionalInteger(options,"maxSequences",1,4);if(!result.accepted)return result;
         if (contains(options, "mixingProfile")) {
             Object raw = options.get("mixingProfile");
             if (!(raw instanceof String)) {
@@ -157,7 +158,7 @@ final class SynthContract {
     static Validation validateNoteOn(Map<String, Object> options, double maxFrequencyHz) {
         Validation result = rejectUnknownOptions(options, "voiceId", "frequency", "note", "attack", "decay", "sustain", "release", "volume",
                 "waveType", "pan", "lfoFreq", "lfoDepth", "noiseRate", "lowPassHz", "pulseWidth", "waveTable", "bitDepth",
-                "filterType", "filterHz", "filterQ", "fmRatio", "fmDepth", "detune", "spatialX", "spatialY", "modulations");
+                "filterType", "filterHz", "filterQ", "fmRatio", "fmDepth", "detune", "spatialX", "spatialY", "modulations", "bus", "effectSend", "priority");
         if (!result.accepted) return result;
         result = validateVoiceId(options); if (!result.accepted) return result;
         Map<String, Object> tone = new java.util.HashMap<>(options);
@@ -178,7 +179,7 @@ final class SynthContract {
 
     static Validation validateUpdateVoice(Map<String, Object> options, double maxFrequencyHz) {
         Validation result = rejectUnknownOptions(options, "voiceId", "frequency", "note", "volume", "filterHz", "filterQ",
-                "lfoFreq", "lfoDepth", "pulseWidth", "fmRatio", "fmDepth", "modulations");
+                "lfoFreq", "lfoDepth", "pulseWidth", "fmRatio", "fmDepth", "modulations", "pan", "spatialX", "spatialY", "noiseRate", "lowPassHz", "effectSend");
         if (!result.accepted) return result;
         result = validateVoiceId(options); if (!result.accepted) return result;
         if (options.size() == 1) return Validation.rejected("changes", "missing_required", null);
@@ -199,7 +200,7 @@ final class SynthContract {
                 "waveType", "pan", "panEnd", "frequencyEnd", "lfoFreq", "lfoDepth",
                 "noiseRate", "noiseRateEnd", "lowPassHz", "pulseWidth", "pulseWidthEnd",
                 "waveTable", "bitDepth", "decay", "sustain", "filterType", "filterHz",
-                "filterHzEnd", "filterQ", "fmRatio", "fmDepth", "fmDepthEnd", "detune", "spatialX", "spatialY");
+                "filterHzEnd", "filterQ", "fmRatio", "fmDepth", "fmDepthEnd", "detune", "spatialX", "spatialY", "bus", "effectSend", "priority");
         if (!result.accepted) return result;
 
         boolean hasFrequency = contains(options, "frequency");
@@ -234,7 +235,7 @@ final class SynthContract {
                 "frequencies", "notes", "duration", "attack", "release", "volume",
                 "waveType", "panSpread", "pans", "noiseRate", "lowPassHz",
                 "pulseWidth", "waveTable", "bitDepth", "decay", "sustain", "filterType",
-                "filterHz", "filterQ", "fmRatio", "fmDepth", "detunes", "spatialX", "spatialY");
+                "filterHz", "filterQ", "fmRatio", "fmDepth", "detunes", "spatialX", "spatialY", "bus", "effectSend", "priority");
         if (!result.accepted) return result;
 
         boolean hasFrequencies = contains(options, "frequencies");
@@ -315,102 +316,6 @@ final class SynthContract {
     }
 
     @SuppressWarnings("unchecked")
-    static Validation validatePattern(Map<String, Object> options, double maxFrequencyHz) {
-        Validation result = rejectUnknownOptions(options,
-                "steps", "bpm", "swing", "stepDuration", "noteValue", "attack",
-                "release", "volume", "waveType", "pan", "panEnd",
-                "frequencyEnd", "lfoFreq", "lfoDepth", "noiseRate", "noiseRateEnd",
-                "lowPassHz", "pulseWidth", "pulseWidthEnd", "waveTable", "bitDepth",
-                "decay", "sustain", "filterType", "filterHz", "filterHzEnd", "filterQ",
-                "fmRatio", "fmDepth", "fmDepthEnd", "detune", "spatialX", "spatialY");
-        if (!result.accepted) return result;
-
-        Object rawSteps = options != null ? options.get("steps") : null;
-        if (!(rawSteps instanceof Object[])) {
-            return Validation.rejected("steps", "not_array", rawSteps);
-        }
-        Object[] steps = (Object[]) rawSteps;
-        if (steps.length < 1 || steps.length > MAX_PATTERN_STEPS) {
-            return Validation.rejected("steps", "invalid_step_count", steps.length);
-        }
-
-        result = optionalDouble(options, "bpm", MIN_BPM, MAX_BPM);
-        if (!result.accepted) return result;
-        result = optionalDouble(options, "swing", MIN_SWING, MAX_SWING);
-        if (!result.accepted) return result;
-        result = optionalDouble(options, "stepDuration", MIN_DURATION_MS, MAX_DURATION_MS);
-        if (!result.accepted) return result;
-        result = optionalNoteValue(options, "noteValue");
-        if (!result.accepted) return result;
-        result = validateVoiceOptions(options, maxFrequencyHz, true);
-        if (!result.accepted) return result;
-
-        int globalWaveType = integerValue(options, "waveType", DEFAULT_WAVE_TYPE);
-        boolean globalHasWaveTable = contains(options, "waveTable");
-
-        for (Object rawStep : steps) {
-            if (!(rawStep instanceof Map)) {
-                return Validation.rejected("steps", "invalid_step_type", rawStep);
-            }
-            Map<String, Object> step = (Map<String, Object>) rawStep;
-            result = rejectUnknownOptions(step,
-                    "rest", "frequency", "note", "duration", "noteValue", "attack",
-                    "release", "volume", "waveType", "pan", "panEnd", "frequencyEnd",
-                    "lfoFreq", "lfoDepth", "noiseRate", "noiseRateEnd", "lowPassHz",
-                    "pulseWidth", "pulseWidthEnd", "waveTable", "bitDepth",
-                    "decay", "sustain", "filterType", "filterHz", "filterHzEnd", "filterQ",
-                    "fmRatio", "fmDepth", "fmDepthEnd", "detune", "spatialX", "spatialY");
-            if (!result.accepted) return result;
-
-            boolean rest = Boolean.TRUE.equals(step.get("rest"));
-            if (contains(step, "rest") && !(step.get("rest") instanceof Boolean)) {
-                return Validation.rejected("rest", "not_boolean", step.get("rest"));
-            }
-            boolean hasFrequency = contains(step, "frequency");
-            boolean hasNote = contains(step, "note");
-            int pitchFields = (rest ? 1 : 0) + (hasFrequency ? 1 : 0) + (hasNote ? 1 : 0);
-            if (pitchFields != 1) {
-                return Validation.rejected("steps", pitchFields == 0
-                        ? "missing_pitch_or_rest" : "conflicting_pitch_fields", rawStep);
-            }
-            if (hasFrequency) {
-                result = optionalDouble(step, "frequency", MIN_FREQUENCY_HZ, maxFrequencyHz);
-                if (!result.accepted) return result;
-            }
-            if (hasNote) {
-                result = validNote(step.get("note"), "note");
-                if (!result.accepted) return result;
-            }
-            result = optionalDouble(step, "duration", MIN_DURATION_MS, MAX_DURATION_MS);
-            if (!result.accepted) return result;
-            result = optionalNoteValue(step, "noteValue");
-            if (!result.accepted) return result;
-            result = validateVoiceOptions(step, maxFrequencyHz, true);
-            if (!result.accepted) return result;
-            if (!rest) {
-                result = validateWaveTableRequirement(step, globalWaveType, globalHasWaveTable);
-                if (!result.accepted) return result;
-                result = validatePatternEnvelope(options, step);
-                if (!result.accepted) return result;
-
-                Map<String, Object> effective = new java.util.HashMap<>(options);
-                effective.remove("steps");
-                effective.putAll(step);
-                result = validateSpatial(effective);
-                if (!result.accepted) return result;
-                int stepMs = (int) Math.round(resolvePatternStepDuration(options, step));
-                result = validateExpressiveRules(effective, stepMs);
-                if (!result.accepted) return result;
-                double stepFrequency = hasNote ? parseNoteToFrequency((String) step.get("note"))
-                        : finiteDouble(step.get("frequency"));
-                result = validateDetuneRange(effective, stepFrequency, maxFrequencyHz);
-                if (!result.accepted) return result;
-            }
-        }
-
-        return Validation.accepted();
-    }
-
     private static Validation validateWaveTableRequirement(Map<String, Object> options,
             int fallbackWaveType, boolean fallbackHasWaveTable) {
         int waveType = integerValue(options, "waveType", fallbackWaveType);
@@ -420,72 +325,7 @@ final class SynthContract {
                 : Validation.accepted();
     }
 
-    private static int integerValue(Map<String, Object> options, String key, int fallback) {
-        if (!contains(options, key)) return fallback;
-        return ((Number) options.get(key)).intValue();
-    }
-
-    private static Validation validatePatternEnvelope(Map<String, Object> pattern,
-            Map<String, Object> step) {
-        int duration = (int) Math.round(resolvePatternStepDuration(pattern, step));
-        boolean attackExplicit = contains(step, "attack") || contains(pattern, "attack");
-        Object attackValue = contains(step, "attack")
-                ? step.get("attack") : pattern.get("attack");
-        int attack = contains(step, "attack")
-                ? readInteger(step, "attack", DEFAULT_ATTACK_MS)
-                : readInteger(pattern, "attack", DEFAULT_ATTACK_MS);
-        if (attackExplicit && attack >= duration) {
-            return Validation.rejected("attack", "attack_greater_or_equal_duration",
-                    attackValue);
-        }
-
-        boolean releaseExplicit = contains(step, "release") || contains(pattern, "release");
-        Object releaseValue = contains(step, "release")
-                ? step.get("release") : pattern.get("release");
-        int release = contains(step, "release")
-                ? readInteger(step, "release", DEFAULT_RELEASE_MS)
-                : readInteger(pattern, "release", DEFAULT_RELEASE_MS);
-        if (releaseExplicit && release > Math.max(0, duration - attack)) {
-            return Validation.rejected("release", "release_exceeds_remaining_duration",
-                    releaseValue);
-        }
-        return Validation.accepted();
-    }
-
-    private static double resolvePatternStepDuration(Map<String, Object> pattern,
-            Map<String, Object> step) {
-        if (contains(step, "duration")) {
-            return finiteDouble(step.get("duration"));
-        }
-        double bpm = contains(pattern, "bpm") ? finiteDouble(pattern.get("bpm")) : 120.0;
-        double quarterMs = 60000.0 / bpm;
-        if (contains(step, "noteValue")) {
-            return patternNoteValueMs((String) step.get("noteValue"), quarterMs);
-        }
-        if (contains(pattern, "noteValue")) {
-            return patternNoteValueMs((String) pattern.get("noteValue"), quarterMs);
-        }
-        if (contains(pattern, "stepDuration")) {
-            return finiteDouble(pattern.get("stepDuration"));
-        }
-        return 100.0;
-    }
-
-    private static double patternNoteValueMs(String noteValue, double quarterMs) {
-        switch (noteValue) {
-            case "1n": return quarterMs * 4.0;
-            case "2n": return quarterMs * 2.0;
-            case "2n.": return quarterMs * 3.0;
-            case "4n": return quarterMs;
-            case "4n.": return quarterMs * 1.5;
-            case "8n": return quarterMs * 0.5;
-            case "8n.": return quarterMs * 0.75;
-            case "8t": return quarterMs / 3.0;
-            case "16n": return quarterMs * 0.25;
-            case "16t": return quarterMs / 6.0;
-            default: return quarterMs;
-        }
-    }
+    private static int integerValue(Map<String,Object> options,String key,int fallback) {return contains(options,key)?((Number)options.get(key)).intValue():fallback;}
 
     static double parseNoteToFrequency(String noteName) {
         if (noteName == null || noteName.trim().isEmpty()) return -1.0;
@@ -546,7 +386,10 @@ final class SynthContract {
 
     private static Validation validateVoiceOptions(Map<String, Object> options,
             double maxFrequencyHz, boolean allowSweep) {
-        Validation result = validateSpatial(options);
+        Validation result=optionalInteger(options,"priority",0,3);if(!result.accepted)return result;
+        result=optionalDouble(options,"effectSend",0,1);if(!result.accepted)return result;
+        if(contains(options,"bus"))try{SynthStudioContract.bus(options.get("bus"));}catch(IllegalArgumentException e){return Validation.rejected("bus","unsupported_value",options.get("bus"));}
+        result = validateSpatial(options);
         if (!result.accepted) return result;
         result = optionalInteger(options, "duration", MIN_DURATION_MS, MAX_DURATION_MS);
         if (!result.accepted) return result;

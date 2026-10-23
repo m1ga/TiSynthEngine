@@ -8,12 +8,30 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { SYNTH_BUS_MUSIC, SYNTH_BUS_EFFECTS, SYNTH_BUS_UI, SYNTH_BUS_AMBIENCE };
+typedef struct { double value,target,step; int remaining; } SynthSend;
+static inline double synth_send_target(int bus,double explicitSend,uint32_t mask) {
+ return explicitSend>=0?explicitSend:((bus>=0&&bus<4&&(mask&(1u<<bus)))?1:0);
+}
+static inline void synth_send_init(SynthSend *s,int bus,double explicitSend,uint32_t mask) {
+ s->value=s->target=synth_send_target(bus,explicitSend,mask);s->step=0;s->remaining=0;
+}
+static inline void synth_send_update(SynthSend *s,int bus,double explicitSend,uint32_t mask,int frames) {
+ double target=synth_send_target(bus,explicitSend,mask);
+ if(target==s->target)return;
+ s->target=target;s->remaining=frames>0?frames:1;s->step=(target-s->value)/s->remaining;
+}
+static inline double synth_send_tick(SynthSend *s) {
+ if(s->remaining>0) {if(--s->remaining==0)s->value=s->target;else s->value+=s->step;}return s->value;
+}
+
 typedef struct { int enabled; double rateHz, depth, mix; } SynthChorusConfig;
 typedef struct { int enabled; double timeMs, syncBeats, feedback, mix; } SynthDelayConfig;
 typedef struct { int enabled; double decay, damping, mix; } SynthReverbConfig;
 typedef struct { int enabled; double drive, mix; } SynthSaturationConfig;
 typedef struct {
     double inputGain;
+    uint32_t applyToMask;
     SynthChorusConfig chorus;
     SynthDelayConfig delay;
     SynthReverbConfig reverb;
@@ -32,7 +50,7 @@ typedef struct {
 } SynthEffects;
 
 static inline SynthEffectsConfig synth_effects_default_config(void) {
-    SynthEffectsConfig c; memset(&c,0,sizeof(c)); c.inputGain=1;
+    SynthEffectsConfig c; memset(&c,0,sizeof(c)); c.inputGain=1;c.applyToMask=15;
     c.chorus.rateHz=.8; c.chorus.depth=.4; c.chorus.mix=.25;
     c.delay.timeMs=250; c.delay.feedback=.3; c.delay.mix=.25;
     c.reverb.decay=1.5; c.reverb.damping=.5; c.reverb.mix=.2;
@@ -40,7 +58,7 @@ static inline SynthEffectsConfig synth_effects_default_config(void) {
 }
 static inline int synth_effects_range(double x,double a,double b) { return isfinite(x)&&x>=a&&x<=b; }
 static inline int synth_effects_validate(const SynthEffectsConfig *c) {
-    return c && (c->chorus.enabled==0||c->chorus.enabled==1) && (c->delay.enabled==0||c->delay.enabled==1)
+    return c && c->applyToMask<=15 && (c->chorus.enabled==0||c->chorus.enabled==1) && (c->delay.enabled==0||c->delay.enabled==1)
       && (c->reverb.enabled==0||c->reverb.enabled==1) && (c->saturation.enabled==0||c->saturation.enabled==1)
       && synth_effects_range(c->inputGain,0,4)
       && synth_effects_range(c->chorus.rateHz,.05,5) && synth_effects_range(c->chorus.depth,0,1) && synth_effects_range(c->chorus.mix,0,1)
@@ -51,8 +69,8 @@ static inline int synth_effects_validate(const SynthEffectsConfig *c) {
 }
 static inline int synth_effect_ring_init(SynthEffects *s,SynthEffectRing *r,size_t n) {
     r->size=n;r->position=0;r->epoch=1;
-    r->values=(double*)calloc(n,sizeof(double));r->tags=(uint64_t*)calloc(n,sizeof(uint64_t));
-    s->memoryBytes+=n*(sizeof(double)+sizeof(uint64_t));return r->values&&r->tags;
+    r->values=(double*)calloc(n,sizeof(double));r->tags=(uint64_t*)calloc((n+15)/16,sizeof(uint64_t));
+    s->memoryBytes+=n*sizeof(double)+((n+15)/16)*sizeof(uint64_t);return r->values&&r->tags;
 }
 static inline void synth_effect_ring_destroy(SynthEffectRing *r) { free(r->values);free(r->tags);memset(r,0,sizeof(*r)); }
 static inline void synth_effects_destroy(SynthEffects *s) {
@@ -101,7 +119,7 @@ static inline void synth_effects_panic(SynthEffects *s) {
     s->chorusGate.tail=s->delayGate.tail=s->reverbGate.tail=0;
     s->chorusGate.quiet=s->delayGate.quiet=s->reverbGate.quiet=0;
 }
-static inline double synth_effect_ring_at(const SynthEffectRing *r,size_t i) { return r->tags[i]==r->epoch?r->values[i]:0; }
+static inline double synth_effect_ring_at(const SynthEffectRing *r,size_t i) { return r->tags[i/16]==r->epoch?r->values[i]:0; }
 static inline double synth_effect_ring_read(const SynthEffectRing *r,double distance) {
     distance=fmax(1,fmin((double)r->size-2,distance));
     double pos=(double)r->position-distance;if(pos<0)pos+=r->size;
@@ -109,7 +127,16 @@ static inline double synth_effect_ring_read(const SynthEffectRing *r,double dist
     double f=pos-i;return synth_effect_ring_at(r,i)*(1-f)+synth_effect_ring_at(r,j)*f;
 }
 static inline void synth_effect_ring_write(SynthEffectRing *r,double v) {
-    r->values[r->position]=fabs(v)<1e-25?0:v;r->tags[r->position]=r->epoch;
+    /* Epochs cover sixteen-sample pages. Clearing one page on its first write
+     * costs at most sixteen stores and avoids a per-sample 64-bit tag array.
+     * Panic itself remains independent of buffer size. */
+    size_t page=r->position/16;
+    if(r->tags[page]!=r->epoch) {
+        size_t first=page*16,end=first+16;if(end>r->size)end=r->size;
+        for(size_t i=first;i<end;i++)r->values[i]=0;
+        r->tags[page]=r->epoch;
+    }
+    r->values[r->position]=fabs(v)<1e-25?0:v;
     if(++r->position==r->size)r->position=0;
 }
 static inline double synth_effect_approach(double a,double b,double step) {
@@ -214,5 +241,15 @@ static inline void synth_effects_finish(SynthEffects *s,double masterGain,double
         double drive=s->current.saturation.drive,mix=s->current.saturation.mix*s->saturationSend;
         l+=(tanh(l*drive)/tanh(drive)-l)*mix;r+=(tanh(r*drive)/tanh(drive)-r)*mix;
     }*left=l;*right=r;
+}
+/* A single effects chain sees only the selected share. Dry audio receives the
+ * same global gain, while saturation runs before the shares recombine. */
+static inline void synth_effects_process_routed(SynthEffects *s,double tempo,
+ double dryL,double dryR,double selectedL,double selectedR,double masterGain,
+ double *left,double *right) {
+ synth_effects_process(s,tempo,&selectedL,&selectedR);
+ synth_effects_finish(s,masterGain,&selectedL,&selectedR);
+ double global=s->current.inputGain*masterGain;
+ *left=selectedL+dryL*global;*right=selectedR+dryR*global;
 }
 #endif

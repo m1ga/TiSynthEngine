@@ -16,6 +16,7 @@
 #include "../../shared/synth_modulation.h"
 #include "../../shared/synth_spatial.h"
 #include "../../shared/synth_stats.h"
+#include "../../shared/synth_transport.h"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -23,7 +24,6 @@
 
 #define DEFAULT_SAMPLE_RATE   44100.0
 #define ABSOLUTE_MAX_VOICES   32
-#define SEQ_MAX_STEPS         32
 #define WAVETABLE_MAX_SAMPLES 64
 
 #define OUTPUT_CEILING        0.85
@@ -35,7 +35,6 @@
 #define CONSERVATIVE_SINE_GAIN      0.44
 #define STOP_ALL_FADE_MS      20
 #define VOICE_STEAL_FADE_MS   6
-#define PATTERN_MAX_STEPS     512
 
 #define COMMAND_QUEUE_CAPACITY 128
 
@@ -64,6 +63,9 @@
 // ---------------------------------------------------------------------------
 
 typedef struct {
+  int sequenceSlot,priority,bus,sequenceTimeUnit;double effectSend;SynthSend send;
+  uint64_t voiceGeneration;uint32_t sequenceId;
+  double sequenceStartClock,sequenceLength,sequenceFrequencyEnd,sequenceNoiseEnd,sequencePanEnd,sequencePulseEnd,sequenceFMEnd;BOOL sequenceFMSweep;
   SynthHeld held;
   SynthModulation modulation;
   BOOL modulating;
@@ -101,13 +103,6 @@ typedef struct {
   double lfoPhaseIncrement;
   double lfoDepth;
 
-  // Native sequencer
-  double seqFreqs[SEQ_MAX_STEPS];
-  int    seqStepCount;
-  int    seqCurrentStep;
-  int    seqStepSamples;
-  int    seqSamplesInStep;
-
   // Noise LCG
   uint64_t noiseState;
   double noisePhase;
@@ -144,6 +139,7 @@ typedef struct {
 } SynthVoice;
 
 typedef struct {
+  SynthSend send;int bus;double effectSend;
   bool isActive;
   bool spatial;
   SynthSpatial spatialState;
@@ -178,6 +174,9 @@ typedef struct {
 // ---------------------------------------------------------------------------
 
 typedef struct {
+  int sequenceSlot,priority,bus,sequenceTimeUnit;double effectSend;BOOL hasSendUpdate;uint32_t sequenceId;
+  SynthSpatialPrepared preparedSpatial;BOOL hasSpatialUpdate;
+  uint64_t voiceGeneration;
   int32_t voiceId;
   SynthModulationConfig modulation;
   BOOL hasModulations;
@@ -210,9 +209,6 @@ typedef struct {
   int bitDepth;
   double wavetable[WAVETABLE_MAX_SAMPLES];
   int wavetableSize;
-  double seqFreqs[SEQ_MAX_STEPS];
-  int    seqStepCount;
-  int    seqStepDurationMs;
   int    decaySamples;
   double sustain;
   int    filterType;
@@ -454,23 +450,6 @@ static double ParseNoteToFrequency(NSString *noteName)
   return 440.0 * pow(2.0, (midi - 69.0) / 12.0);
 }
 
-// Note value → duration in milliseconds
-static double ComputeNoteValueMs(NSString *nv, double quarterMs)
-{
-  if (nv == nil) return quarterMs;
-  if ([nv isEqualToString:@"1n"])  return quarterMs * 4.0;
-  if ([nv isEqualToString:@"2n"])  return quarterMs * 2.0;
-  if ([nv isEqualToString:@"2n."]) return quarterMs * 3.0;
-  if ([nv isEqualToString:@"4n"])  return quarterMs;
-  if ([nv isEqualToString:@"4n."]) return quarterMs * 1.5;
-  if ([nv isEqualToString:@"8n"])  return quarterMs * 0.5;
-  if ([nv isEqualToString:@"8n."]) return quarterMs * 0.75;
-  if ([nv isEqualToString:@"8t"])  return quarterMs / 3.0;
-  if ([nv isEqualToString:@"16n"]) return quarterMs * 0.25;
-  if ([nv isEqualToString:@"16t"]) return quarterMs / 6.0;
-  return quarterMs;
-}
-
 // ---------------------------------------------------------------------------
 // Expressive controls: decay, sustain, filter, FM and detune. Options are
 // already validated; a step reads its own keys over the values it inherits.
@@ -584,19 +563,19 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
  c.attackSamples=MsToSamples(v->attack,rate);c.decaySamples=MsToSamples(v->decay,rate);c.releaseSamples=MsToSamples(v->release,rate);c.sustain=v->sustain;
  c.waveType=v->waveType;c.lfoFreq=v->lfoFreq;c.lfoDepth=v->lfoDepth;c.noiseRate=v->noiseRate;c.lowPassHz=v->lowPassHz;c.pulseWidth=v->pulseWidth;c.bitDepth=v->bitDepth;
  c.filterType=v->filterType;c.filterHz=v->filterHz;c.filterQ=v->filterQ;c.fmRatio=v->fmRatio;c.fmDepth=v->fmDepth;
- c.spatial=v->spatial;c.spatialX=v->spatialX;c.spatialY=v->spatialY;c.wavetableSize=v->wavetableSize;memcpy(c.wavetable,v->wavetable,sizeof(c.wavetable));
+ c.frequencyEnd=v->frequencyEnd;c.noiseRateEnd=v->noiseRateEnd;c.panEnd=v->panEnd;c.pulseWidthEnd=v->pulseWidthEnd;c.filterHzEnd=v->filterHzEnd;c.fmDepthEnd=v->fmDepthEnd;c.hasFmDepthEnd=v->fmDepthSweep;
+ c.bus=v->bus;c.effectSend=v->effectSend;c.priority=v->priority;c.spatial=v->spatial;c.spatialX=v->spatialX;c.spatialY=v->spatialY;c.wavetableSize=v->wavetableSize;memcpy(c.wavetable,v->wavetable,sizeof(c.wavetable));
  c.modulation=StudioModulationFromValues(v->mods);c.hasModulations=v->mods[0]||v->mods[6];return c;
 }
 
 @interface TiSynthengineModule () {
-  SynthSequenceTransport *sequence;
+  SynthTransport *sequence;
   NSMutableDictionary *sequenceOptions;
   SynthEffects effects;
   SynthEffectsConfig processingOptions;
   int32_t sequenceVoiceId;
-  uint32_t sequenceAppliedRevision;
   SynthStats stats;
-  uint64_t statsRejected[3], droppedPatternSteps;
+  uint64_t statsRejected[3], priorityDrops,rejectedPublications;
   BOOL statsEnabled;
   mach_timebase_info_data_t statsTimebase;
   AVAudioEngine      *audioEngine;
@@ -607,7 +586,10 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
 
   SynthVoice    voices[ABSOLUTE_MAX_VOICES];
   SynthLiveIdentity identities[ABSOLUTE_MAX_VOICES];
-  uint64_t voiceOrder;
+  _Atomic(uint32_t) identityPriority[ABSOLUTE_MAX_VOICES];
+  uint64_t voiceOrder,batchOrder;int batchRemaining;
+  NSMutableDictionary *voiceGenerations,*voicePositions,*voiceSpatialModes;
+  uint64_t nextVoiceGeneration;
   TailVoice     tails[ABSOLUTE_MAX_VOICES];
   SynthCommand  commandQueue[COMMAND_QUEUE_CAPACITY];
 
@@ -623,11 +605,8 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   // Atomic master volume: written by main thread, read by audio thread
   _Atomic(double) masterVolume;
 
-  // Pattern cancellation: incremented each time playPattern is called or shutdown
-  _Atomic(uint32_t) patternGeneration;
-
-  // Generation of the pattern whose patternend event is still owed; 0 when none
-  _Atomic(uint32_t) pendingPatternGeneration;
+  dispatch_source_t sequenceEventTimer;
+  uint32_t nextSequenceId;
 
   NSMutableSet *warningKeys;
 
@@ -675,15 +654,13 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   [super startup];
   synth_stats_init(&stats);
   mach_timebase_info(&statsTimebase);
-  warningKeys = [[NSMutableSet alloc] init];
+  warningKeys = [[NSMutableSet alloc] init];voiceGenerations=[NSMutableDictionary dictionary];voicePositions=[NSMutableDictionary dictionary];voiceSpatialModes=[NSMutableDictionary dictionary];
   engineSampleRate = DEFAULT_SAMPLE_RATE;
   engineMaxVoices  = 8;
   atomic_store_explicit(&commandWriteIndex, 0, memory_order_relaxed);
   atomic_store_explicit(&commandReadIndex,  0, memory_order_relaxed);
   commandProducerLock = OS_UNFAIR_LOCK_INIT;
   atomic_store_explicit(&masterVolume,      1.0, memory_order_relaxed);
-  atomic_store_explicit(&patternGeneration, 0, memory_order_relaxed);
-  atomic_store_explicit(&pendingPatternGeneration, 0, memory_order_relaxed);
   atomic_store_explicit(&emergencyStopRequested, false, memory_order_relaxed);
   atomic_store_explicit(&emergencyShutdownRequested, false, memory_order_relaxed);
   if (!observingAudioNotifications) {
@@ -902,7 +879,6 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     voices[i].sustain       = 1.0;
     voices[i].svfSweeping   = false;
     voices[i].fmActive      = false;
-    voices[i].seqStepCount  = 0;
     tails[i].isActive       = false;
   }
   synth_stats_stopped(&stats);
@@ -945,6 +921,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
 {
   TailVoice *tail = [self findTailSlot];
   synth_stats_tail_start(&stats, tail->isActive);
+  tail->send=voice->send;tail->bus=voice->bus;tail->effectSend=voice->effectSend;
   tail->isActive = true;
   tail->spatial = voice->spatial;
   if (tail->spatial) {
@@ -989,21 +966,31 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     voice->isActive = false;
     synth_identity_set(&identities[i],0,0);
   }
+  // Panic fades stay dry so they cannot refill the invalidated FX histories.
+  for(int i=0;i<engineMaxVoices;i++)if(tails[i].isActive) {
+    tails[i].effectSend=0;
+    synth_send_init(&tails[i].send,tails[i].bus,0,effects.config.applyToMask);
+  }
 }
 
+- (BOOL)canAdmitCount:(int)count priority:(int)priority
+{
+ int available=0;for(int i=0;i<engineMaxVoices;i++)if(!voices[i].isActive||voices[i].priority<=priority)available++;return available>=count;
+}
 - (int)findVoiceSlotForCommand:(const SynthCommand *)cmd
 {
   BOOL heldPool=cmd->voiceId!=0;
   for(int i=0;i<engineMaxVoices;i++) {
-    if(voices[i].isActive && cmd->voiceId && voices[i].held.voiceId==cmd->voiceId)return i;
+    if(voices[i].isActive && cmd->voiceId && voices[i].held.voiceId==cmd->voiceId)return voices[i].priority<=cmd->priority?i:-1;
     if(voices[i].isActive && voices[i].held.voiceId)heldPool=YES;
   }
   int slot=-1, leastRemaining=INT_MAX; BOOL chosenRelease=NO;
   for(int i=0;i<engineMaxVoices;i++) {
     SynthVoice *v=&voices[i]; if(!v->isActive)return i;
+    if(v->priority>cmd->priority||(batchRemaining>0&&v->held.order>batchOrder))continue;
     int remaining=v->totalSamples-v->samplesPlayed;
     BOOL releasing=v->held.voiceId ? v->held.releasing!=0 : remaining<=v->releaseSamples;
-    if(slot<0 || (heldPool ? (releasing!=chosenRelease ? releasing : v->held.order<voices[slot].held.order) : remaining<leastRemaining)) {
+    if(slot<0 || v->priority<voices[slot].priority || (v->priority==voices[slot].priority && (heldPool ? (releasing!=chosenRelease ? releasing : v->held.order<voices[slot].held.order) : remaining<leastRemaining))) {
       slot=i; leastRemaining=remaining; chosenRelease=releasing;
     }
   }
@@ -1019,15 +1006,15 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   if(cmd->voiceId>0 && !cmd->sequenceGeneration &&
      (!cmd->hasModulations || (!cmd->modulation.lfo[0].enabled && !cmd->modulation.lfo[1].enabled)) &&
      cmd->frequencyEnd<MIN_FREQUENCY_HZ && cmd->pulseWidthEnd<.05 &&
-     cmd->filterHzEnd<SYNTH_FILTER_MIN_HZ && !cmd->hasFmDepthEnd && !cmd->seqStepCount) {
-    double values[SYNTH_LIVE_COUNT]={cmd->frequency,cmd->volume,cmd->filterHz,cmd->filterQ,cmd->lfoFreq,cmd->lfoDepth,cmd->pulseWidth,cmd->fmRatio,cmd->fmDepth};
+     cmd->filterHzEnd<SYNTH_FILTER_MIN_HZ && !cmd->hasFmDepthEnd) {
+    double values[SYNTH_LIVE_COUNT]={cmd->frequency,cmd->volume,cmd->filterHz,cmd->filterQ,cmd->lfoFreq,cmd->lfoDepth,cmd->pulseWidth,cmd->fmRatio,cmd->fmDepth,cmd->noiseRate>0?cmd->noiseRate/engineSampleRate:1,cmd->lowPassHz>0?1-exp(-2*M_PI*cmd->lowPassHz/engineSampleRate):1,cmd->pan};
     double cutoff=ClampDouble(cmd->lowPassHz,0,engineSampleRate*.45);
     SynthRetriggerKey next={cmd->waveType,cmd->filterType,cmd->bitDepth,cmd->wavetableSize,cutoff>0?1-exp(-2*M_PI*cutoff/engineSampleRate):0,values,cmd->wavetable};
     for(int i=0;i<engineMaxVoices;i++) {
       const SynthVoice *d=&voices[i];
       if(!d->isActive || d->held.voiceId<=0 || !d->held.releasing || d->held.releasePlayed>=d->releaseSamples ||
          d->samplesPlayed>=d->totalSamples || d->sequenceGeneration || d->phaseIncrDelta || d->pulseWidthDelta ||
-         d->fmDepthDelta || d->svfSweeping || d->seqStepCount || synth_modulation_is_active(&d->modulation))continue;
+         d->fmDepthDelta || d->svfSweeping || synth_modulation_is_active(&d->modulation))continue;
       SynthRetriggerKey old={d->waveType,d->svf.type,d->bitDepth,d->wavetableSize,d->filterAlpha,d->live.value,d->wavetable};
       if(d->held.order>donorOrder && synth_retrigger_compatible(&d->live,&old,&next)) {
         inherit=YES;donorOrder=d->held.order;inheritedPhase=d->phase;inheritedFM=d->fmModPhase;
@@ -1036,11 +1023,16 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     }
   }
   int slot    = [self findVoiceSlotForCommand:cmd];
+  if(slot<0){__atomic_fetch_add(&priorityDrops,1,__ATOMIC_RELAXED);return;}
   SynthVoice *v = &voices[slot];
   BOOL replacing=v->isActive;
   synth_stats_voice_start(&stats, v->isActive, v->spatial, cmd->spatial);
   if (v->isActive) [self snapshotTailFromVoice:v fadeSamples:stealFadeSamples];
 
+  v->priority=cmd->priority;v->bus=cmd->bus;v->effectSend=cmd->effectSend;synth_send_init(&v->send,v->bus,v->effectSend,effects.config.applyToMask);
+  v->sequenceSlot=cmd->sequenceSlot;v->sequenceId=cmd->sequenceId;v->sequenceTimeUnit=cmd->sequenceTimeUnit;v->voiceGeneration=cmd->voiceGeneration;
+  v->sequenceStartClock=sequence?(cmd->sequenceTimeUnit==SYNTH_SEQUENCE_MS?sequence->milliseconds:sequence->beat):0;
+  v->sequenceLength=cmd->sequenceOffBeat-v->sequenceStartClock;v->sequenceFrequencyEnd=cmd->frequencyEnd;v->sequenceNoiseEnd=cmd->noiseRateEnd;v->sequencePanEnd=cmd->panEnd;v->sequencePulseEnd=cmd->pulseWidthEnd;v->sequenceFMEnd=cmd->fmDepthEnd;v->sequenceFMSweep=cmd->hasFmDepthEnd;
   v->isActive       = true;
   v->sequenceGeneration=cmd->sequenceGeneration;v->sequenceOffBeat=cmd->sequenceOffBeat;
   v->sequenceStep=cmd->sequenceStep;v->sequenceMidi=cmd->sequenceMidi;
@@ -1048,6 +1040,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   v->modulationFrames=0;v->modulating=cmd->hasModulations;
   if(cmd->hasModulations)synth_modulation_set_config(&v->modulation,&cmd->modulation,StudioModCapabilities(cmd->waveType,cmd->filterType));
   memset(&v->held,0,sizeof(v->held)); v->held.voiceId=cmd->voiceId; v->held.order=++voiceOrder;
+  atomic_store_explicit(&identityPriority[slot],cmd->priority,memory_order_release);
   synth_identity_set(&identities[slot],cmd->voiceId,synth_live_allowed(cmd->waveType,cmd->filterType));
   v->spatial = cmd->spatial;
   if (v->spatial) {
@@ -1073,22 +1066,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   v->pan            = ClampDouble(cmd->pan, -1.0, 1.0);
   [self updatePanGainsForVoice:v];
 
-  // Sequencer
-  int seqCount = cmd->seqStepCount;
-  if (seqCount > 0) {
-    v->seqStepCount     = MIN(seqCount, SEQ_MAX_STEPS);
-    v->seqCurrentStep   = 0;
-    v->seqSamplesInStep = 0;
-    int stepDurMs       = cmd->seqStepDurationMs;
-    v->seqStepSamples   = MAX(1, MsToSamples(stepDurMs > 0 ? stepDurMs : 100, engineSampleRate));
-    for (int i = 0; i < v->seqStepCount; i++) {
-      v->seqFreqs[i] = cmd->seqFreqs[i];
-    }
-    v->phaseIncrement = v->seqFreqs[0] / engineSampleRate;
-  } else {
-    v->seqStepCount   = 0;
-    v->phaseIncrement = cmd->frequency / engineSampleRate;
-  }
+  v->phaseIncrement = cmd->frequency / engineSampleRate;
 
   // Pitch sweep
   double freqEnd = cmd->frequencyEnd;
@@ -1174,7 +1152,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
 
   if(cmd->voiceId) {
     v->eventGain=VoiceGainForEvent(mixingProfile,v->waveType,cmd->eventVoiceCount);
-    double values[SYNTH_LIVE_COUNT]={cmd->frequency,cmd->volume,cmd->filterHz,cmd->filterQ,cmd->lfoFreq,cmd->lfoDepth,cmd->pulseWidth,cmd->fmRatio,cmd->fmDepth};
+    double values[SYNTH_LIVE_COUNT]={cmd->frequency,cmd->volume,cmd->filterHz,cmd->filterQ,cmd->lfoFreq,cmd->lfoDepth,cmd->pulseWidth,cmd->fmRatio,cmd->fmDepth,cmd->noiseRate>0?cmd->noiseRate/engineSampleRate:1,cmd->lowPassHz>0?1-exp(-2*M_PI*cmd->lowPassHz/engineSampleRate):1,cmd->pan};
     synth_live_init(&v->live,values); v->fmActive=v->waveType==0;
   }
 
@@ -1190,7 +1168,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
 
 - (BOOL)enqueueCommand:(SynthCommand)cmd
 {
-  // playPattern and direct API calls are independent producers. Serialize them
+  // Serialize public producers
   // without ever taking a lock on the real-time audio consumer.
   os_unfair_lock_lock(&commandProducerLock);
   uint32_t write = atomic_load_explicit(&commandWriteIndex, memory_order_relaxed);
@@ -1214,6 +1192,15 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   return NO;
 }
 
+- (BOOL)heldPriorityAllows:(int32_t)identifier priority:(int)priority
+{
+ os_unfair_lock_lock(&commandProducerLock);int current=-1,pending=-1;
+ uint32_t rd=atomic_load_explicit(&commandReadIndex,memory_order_acquire),wr=atomic_load_explicit(&commandWriteIndex,memory_order_acquire);
+ while(rd!=wr){SynthCommand *c=&commandQueue[rd];if(c->type==SYNTH_CMD_HELD_ON&&c->voiceId==identifier)pending=c->priority;rd=(rd+1)%COMMAND_QUEUE_CAPACITY;}
+ for(int i=0;i<engineMaxVoices;i++)if(synth_identity_mask(&identities[i],identifier)>=0)current=(int)atomic_load_explicit(&identityPriority[i],memory_order_acquire);
+ os_unfair_lock_unlock(&commandProducerLock);return (pending>=0?pending:current)<=priority;
+}
+
 - (int)voiceMaskForId:(int32_t)voiceId
 {
   os_unfair_lock_lock(&commandProducerLock);
@@ -1233,9 +1220,11 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
 {
   for(int i=0;i<engineMaxVoices;i++) {
     SynthVoice *v=&voices[i];
-    if(!v->isActive || v->held.voiceId!=cmd->voiceId)continue;
+    if(!v->isActive || v->held.voiceId!=cmd->voiceId || v->voiceGeneration!=cmd->voiceGeneration)continue;
     if(cmd->type==SYNTH_CMD_HELD_OFF)synth_held_release(&v->held,v->currentEnvelope);
     else if(!(cmd->liveMask & ~synth_live_allowed(v->waveType,v->svf.type))) {
+      if(cmd->hasSendUpdate){v->effectSend=cmd->effectSend;synth_send_update(&v->send,v->bus,v->effectSend,effects.config.applyToMask,MAX(1,MsToSamples(10,engineSampleRate)));}
+      if(cmd->hasSpatialUpdate&&v->spatial)synth_spatial_set_target(&v->spatialState,&cmd->preparedSpatial,MAX(1,MsToSamples(10,engineSampleRate)));
       synth_live_update(&v->live,cmd->liveMask,cmd->liveValues,MAX(1,MsToSamples(10,engineSampleRate)));
       if(cmd->hasModulations && synth_modulation_set_config(&v->modulation,&cmd->modulation,StudioModCapabilities(v->waveType,v->svf.type)))v->modulating=YES;
     }
@@ -1279,7 +1268,8 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   uint64_t validation=synth_stats_load(&statsRejected[0]), stopped=synth_stats_load(&statsRejected[1]), full=synth_stats_load(&statsRejected[2]);
   r[@"rejectedRequestsByReason"]=@{@"validation":@(validation),@"engineStopped":@(stopped),@"queueFull":@(full)};
   r[@"rejectedRequestCount"]=@(validation+stopped+full);
-  r[@"droppedPatternStepCount"]=@(synth_stats_load(&droppedPatternSteps));
+  r[@"rejectedPublicationCount"]=@(synth_stats_load(&rejectedPublications));
+  r[@"priorityDropCount"]=@(synth_stats_load(&priorityDrops));
   return r;
   }
 }
@@ -1298,7 +1288,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   @synchronized(self) {
 #pragma unused(args)
   for(int i=0;i<3;i++) synth_stats_store(&statsRejected[i],0);
-  synth_stats_store(&droppedPatternSteps,0); synth_stats_reset(&stats);
+  synth_stats_store(&priorityDrops,0);synth_stats_store(&rejectedPublications,0);synth_stats_reset(&stats);
   }
 }
 
@@ -1310,22 +1300,22 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   }
 }
 
-- (NSNumber *)startEngine:(id)args
+- (NSNumber *)start:(id)args
 {
   @synchronized(self) {
   id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
   if(raw==nil) raw=@{};
   if(![raw isKindOfClass:[NSDictionary class]]) { __atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED); return @NO; }
   NSDictionary *options=raw;
-  if (![self acceptValidation:[TiSynthengineContract validateStartEngine:options]
-                       method:@"startEngine"]) return @NO;
+  if (![self acceptValidation:[TiSynthengineContract validateStart:options]
+                       method:@"start"]) return @NO;
   if (audioEngine != nil) return @YES;
   SynthStats previousStats=stats;
   int previousMaxVoices=engineMaxVoices;
   double previousSampleRate=engineSampleRate;
 
   NSInteger maxVoices = 0;
-  [self readOptionalIntegerFrom:options method:@"startEngine" key:@"maxVoices"
+  [self readOptionalIntegerFrom:options method:@"start" key:@"maxVoices"
                    defaultValue:8 min:1 max:ABSOLUTE_MAX_VOICES out:&maxVoices];
   engineMaxVoices = (int)maxVoices;
 
@@ -1333,7 +1323,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   id mixingProfileValue = [options objectForKey:@"mixingProfile"];
   if (mixingProfileValue != nil) {
     if (![mixingProfileValue isKindOfClass:[NSString class]]) {
-      [self warnOnceMethod:@"startEngine" key:@"mixingProfile" reason:@"not_string"
+      [self warnOnceMethod:@"start" key:@"mixingProfile" reason:@"not_string"
                      value:mixingProfileValue action:@"engine_not_started"];
       return @NO;
     }
@@ -1347,7 +1337,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     } else if ([profile isEqualToString:@"speakersafe"]) {
       mixingProfile = MIXING_PROFILE_SPEAKER_SAFE;
     } else if (![profile isEqualToString:@"raw"]) {
-      [self warnOnceMethod:@"startEngine" key:@"mixingProfile"
+      [self warnOnceMethod:@"start" key:@"mixingProfile"
                      reason:@"unsupported_value" value:mixingProfileValue
                      action:@"engine_not_started"];
       return @NO;
@@ -1407,7 +1397,11 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     if(lookaheadPeaks){free(lookaheadPeaks);lookaheadPeaks=NULL;}if(lookaheadPeakIndices){free(lookaheadPeakIndices);lookaheadPeakIndices=NULL;}
     return @NO;
   }
-  synth_sequence_init(sequence,engineSampleRate);sequenceOptions=nil;sequenceVoiceId=0;sequenceAppliedRevision=0;
+  synth_transport_init(sequence,engineSampleRate,options[@"maxSequences"]?[options[@"maxSequences"] intValue]:1);sequenceOptions=[NSMutableDictionary dictionary];sequenceVoiceId=0;
+  sequenceEventTimer=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,dispatch_get_main_queue());
+  dispatch_source_set_timer(sequenceEventTimer,DISPATCH_TIME_NOW,10*NSEC_PER_MSEC,NSEC_PER_MSEC);
+  __weak TiSynthengineModule *eventOwner=self;
+  dispatch_source_set_event_handler(sequenceEventTimer,^{[eventOwner drainSequenceEvents];});dispatch_resume(sequenceEventTimer);
   processingOptions=synth_effects_default_config();
   synth_stats_init(&stats);
   synth_stats_enable(&stats,statsEnabled);
@@ -1426,28 +1420,26 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
       BOOL measure = synth_stats_begin(&module->stats);
       uint64_t statsBegin = measure ? mach_absolute_time() : 0;
       // Process all pending commands
-      if (atomic_exchange_explicit(&module->emergencyShutdownRequested, false,
-                                   memory_order_acq_rel)) {
-        [module clearVoices];
-      }
-      if (atomic_exchange_explicit(&module->emergencyStopRequested, false,
-                                   memory_order_acq_rel)) {
-        synth_sequence_request_stop(module->sequence);synth_effects_panic(&module->effects);
-        [module fadeOutAllVoices];
-      }
+      BOOL shutdownAfterCommands=atomic_exchange_explicit(&module->emergencyShutdownRequested,false,memory_order_acq_rel);
+      BOOL stopAfterCommands=atomic_exchange_explicit(&module->emergencyStopRequested,false,memory_order_acq_rel);
       uint32_t rd = atomic_load_explicit(&module->commandReadIndex, memory_order_acquire);
       uint32_t wr = atomic_load_explicit(&module->commandWriteIndex, memory_order_acquire);
 
       while (rd != wr) {
         SynthCommand cmd = module->commandQueue[rd];
         if (cmd.type == CMD_NOTE_ON || cmd.type == SYNTH_CMD_HELD_ON) {
-          [module startVoiceFromCommand:&cmd];
+          if(cmd.eventVoiceCount>1 && cmd.sequenceStep==1 && ![module canAdmitCount:cmd.eventVoiceCount priority:cmd.priority]) {
+            __atomic_fetch_add(&module->priorityDrops,1,__ATOMIC_RELAXED);rd=(rd+cmd.eventVoiceCount)%COMMAND_QUEUE_CAPACITY;continue;
+          }
+          if(cmd.eventVoiceCount>1&&cmd.sequenceStep==1){module->batchOrder=module->voiceOrder;module->batchRemaining=cmd.eventVoiceCount;}
+          [module startVoiceFromCommand:&cmd];if(module->batchRemaining>0)module->batchRemaining--;
         } else if(cmd.type == SYNTH_CMD_HELD_OFF || cmd.type == SYNTH_CMD_HELD_UPDATE) {
           [module applyHeldCommand:&cmd];
         } else if(cmd.type==7) {
           synth_effects_set_config(&module->effects,&cmd.processing);
+          for(int i=0;i<module->engineMaxVoices;i++){SynthVoice *v=&module->voices[i];synth_send_update(&v->send,v->bus,v->effectSend,cmd.processing.applyToMask,MAX(1,MsToSamples(10,module->engineSampleRate)));TailVoice *tail=&module->tails[i];synth_send_update(&tail->send,tail->bus,tail->effectSend,cmd.processing.applyToMask,MAX(1,MsToSamples(10,module->engineSampleRate)));}
         } else if (cmd.type == CMD_STOP_ALL) {
-          synth_sequence_request_stop(module->sequence);
+          synth_transport_stop_all(module->sequence);
           synth_effects_panic(&module->effects);
           [module fadeOutAllVoices];
         } else if (cmd.type == CMD_SHUTDOWN) {
@@ -1456,8 +1448,13 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
         rd = (rd + 1) % COMMAND_QUEUE_CAPACITY;
       }
       atomic_store_explicit(&module->commandReadIndex, rd, memory_order_release);
-      synth_sequence_begin_block(module->sequence);
-      [module updateSequenceVoices];
+      if(stopAfterCommands){synth_transport_stop_all(module->sequence);synth_effects_panic(&module->effects);[module fadeOutAllVoices];}
+      if(shutdownAfterCommands)[module clearVoices];
+      synth_transport_begin_block(module->sequence);
+      for(int slot=0;slot<module->sequence->capacity;slot++) {
+        uint32_t stopped=__atomic_load_n(&module->sequence->latestStoppedId[slot],__ATOMIC_ACQUIRE);
+        if(stopped)for(int i=0;i<module->engineMaxVoices;i++){SynthVoice *v=&module->voices[i];if(v->isActive&&v->sequenceId==stopped)synth_held_release(&v->held,v->currentEnvelope);}
+      }
 
       if (outputData->mNumberBuffers == 0) return noErr;
 
@@ -1485,18 +1482,19 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
           }
         }
 
-        if(module->sequence->playing)[module renderSequenceFrame];
+        if(module->sequence->activeMask)[module renderSequenceFrame];
         double mixL = 0.0;
-        double mixR = 0.0;
+        double mixR = 0.0, selectedL=0,selectedR=0;
 
         if (module->stats.active > 0) for (int i = 0; i < module->engineMaxVoices; i++) {
           SynthVoice *v = &module->voices[i];
           if (!v->isActive) continue;
-          if(v->sequenceGeneration && !v->held.releasing && (v->sequenceGeneration!=module->sequence->generation||module->sequence->beat+1e-10>=v->sequenceOffBeat))synth_held_release(&v->held,v->currentEnvelope);
+          double send=synth_send_tick(&v->send);
+          if(v->sequenceGeneration && !v->held.releasing && [module sequenceGateEnded:v])synth_held_release(&v->held,v->currentEnvelope);
           if (v->spatial && v->samplesPlayed >= v->totalSamples) {
             float l, r;
             synth_spatial_process(&v->spatialState, 0, &l, &r);
-            mixL += l; mixR += r;
+            mixL += l*(1-send); mixR += r*(1-send);selectedL+=l*send;selectedR+=r*send;
             if (--v->spatialDrain <= 0) { v->isActive = false; synth_stats_voice_end(&module->stats,true); }
             continue;
           }
@@ -1506,6 +1504,8 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
             v->phaseIncrement=live[LIVE_FREQUENCY]/module->engineSampleRate;
             v->volume=live[LIVE_VOLUME]*v->eventGain;
             v->lfoPhaseIncrement=live[LIVE_LFO_FREQ]/module->engineSampleRate; v->lfoDepth=live[LIVE_LFO_DEPTH];
+            v->noisePhaseIncrement=live[LIVE_NOISE_RATE];v->filterAlpha=live[LIVE_LOWPASS_HZ]>=1?0:live[LIVE_LOWPASS_HZ];
+            if(v->pan!=live[LIVE_PAN]){v->pan=live[LIVE_PAN];[module updatePanGainsForVoice:v];}
             v->pulseWidth=live[LIVE_PULSE_WIDTH]; v->fmRatio=live[LIVE_FM_RATIO]; v->fmDepth=live[LIVE_FM_DEPTH];
             if(v->svf.type && (v->live.remaining[LIVE_FILTER_HZ]>0 || v->live.remaining[LIVE_FILTER_Q]>0 || v->svfHz!=live[LIVE_FILTER_HZ] || v->svfQ!=live[LIVE_FILTER_Q])) {
               v->svfHz=live[LIVE_FILTER_HZ]; v->svfQ=live[LIVE_FILTER_Q];
@@ -1513,14 +1513,15 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
             }
           }
 
-          // --- Sequencer step advance ---
-          if (v->seqStepCount > 0) {
-            v->seqSamplesInStep++;
-            if (v->seqSamplesInStep >= v->seqStepSamples) {
-              v->seqCurrentStep = (v->seqCurrentStep + 1) % v->seqStepCount;
-              v->phaseIncrement = v->seqFreqs[v->seqCurrentStep] / module->engineSampleRate;
-              v->seqSamplesInStep = 0;
-            }
+          if(v->sequenceGeneration) {
+            double clock=v->sequenceTimeUnit==SYNTH_SEQUENCE_MS?module->sequence->milliseconds:module->sequence->beat;
+            double progress=ClampDouble((clock-v->sequenceStartClock)/fmax(v->sequenceLength,1e-10),0,1);
+            const double *base=v->live.value;
+            if(v->sequenceFrequencyEnd>=1)v->phaseIncrement=(base[LIVE_FREQUENCY]+(v->sequenceFrequencyEnd-base[LIVE_FREQUENCY])*progress)/module->engineSampleRate;
+            if(v->sequenceNoiseEnd>=1)v->noisePhaseIncrement=base[LIVE_NOISE_RATE]+(v->sequenceNoiseEnd/module->engineSampleRate-base[LIVE_NOISE_RATE])*progress;
+            if(v->sequencePulseEnd>=.05)v->pulseWidth=base[LIVE_PULSE_WIDTH]+(v->sequencePulseEnd-base[LIVE_PULSE_WIDTH])*progress;
+            if(v->sequenceFMSweep)v->fmDepth=base[LIVE_FM_DEPTH]+(v->sequenceFMEnd-base[LIVE_FM_DEPTH])*progress;
+            double pan=base[LIVE_PAN]+(v->sequencePanEnd-base[LIVE_PAN])*progress;if(pan!=v->pan){v->pan=pan;[module updatePanGainsForVoice:v];}
           }
 
           // --- LFO vibrato ---
@@ -1561,13 +1562,23 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
             wf = v->filterState;
           }
           if (v->svf.type != SYNTH_FILTER_NONE) {
+            if(v->sequenceGeneration&&v->svfSweeping) {
+              if((v->modulationFrames++&7)==0) {
+                double clock=v->sequenceTimeUnit==SYNTH_SEQUENCE_MS?module->sequence->milliseconds:module->sequence->beat;
+                double progress=ClampDouble((clock-v->sequenceStartClock)/fmax(v->sequenceLength,1e-10),0,1);
+                double cutoff=progress>=1?v->svfHzEnd:synth_geometric_at(v->live.value[LIVE_FILTER_HZ],v->svfHzEnd,progress);
+                if(processingModulation)cutoff=synth_modulation_cutoff(cutoff,mod.cutoffOctaves,module->engineSampleRate);
+                synth_filter_set(&v->svf,cutoff,v->svfQ,module->engineSampleRate);
+              }
+            } else {
             if(processingModulation && ((v->modulationFrames++&15)==0||!v->modulating))synth_filter_set(&v->svf,synth_modulation_cutoff(v->svfHz,mod.cutoffOctaves,module->engineSampleRate),v->svfQ,module->engineSampleRate);
-            if (!v->modulating && synth_filter_update_due(v->svfSweeping, v->samplesPlayed)) {
+            if (!v->modulating && synth_filter_update_due(v->svfSweeping, v->sequenceGeneration?(int)v->modulationFrames++:v->samplesPlayed)) {
               double cutoffHz = v->svfSweeping
                   ? synth_geometric_at(v->svfHz, v->svfHzEnd,
-                                       synth_sweep_progress(v->samplesPlayed, v->totalSamples))
+                                       (v->sequenceGeneration?ClampDouble(((v->sequenceTimeUnit==SYNTH_SEQUENCE_MS?module->sequence->milliseconds:module->sequence->beat)-v->sequenceStartClock)/fmax(v->sequenceLength,1e-10),0,1):synth_sweep_progress(v->samplesPlayed, v->totalSamples)))
                   : v->svfHz;
               synth_filter_set(&v->svf, cutoffHz, v->svfQ, module->engineSampleRate);
+            }
             }
             wf = synth_filter_process(&v->svf, wf);
           }
@@ -1583,10 +1594,10 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
           if (v->spatial) {
             float spatialL, spatialR;
             synth_spatial_process(&v->spatialState, (float)sample, &spatialL, &spatialR);
-            mixL += spatialL; mixR += spatialR;
+            mixL += spatialL*(1-send); mixR += spatialR*(1-send);selectedL+=spatialL*send;selectedR+=spatialR*send;
           } else {
-            mixL += sample * v->leftGain;
-            mixR += sample * v->rightGain;
+            mixL += sample * v->leftGain*(1-send);
+            mixR += sample * v->rightGain*(1-send);selectedL+=sample*v->leftGain*send;selectedR+=sample*v->rightGain*send;
           }
 
           // --- Advance phase ---
@@ -1595,18 +1606,18 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
           if (v->fmActive) {
             v->fmModPhase += effectivePhaseIncr * v->fmRatio;
             v->fmModPhase -= floor(v->fmModPhase);
-            v->fmDepth = ClampDouble(v->fmDepth + v->fmDepthDelta, 0.0, 10.0);
+            if(!v->sequenceGeneration)v->fmDepth = ClampDouble(v->fmDepth + v->fmDepthDelta, 0.0, 10.0);
           }
 
           // --- Pitch sweep ---
-          if (v->phaseIncrDelta != 0.0) {
+          if (!v->sequenceGeneration && v->phaseIncrDelta != 0.0) {
             v->phaseIncrement += v->phaseIncrDelta;
           }
-          v->noisePhaseIncrement += v->noisePhaseIncrDelta;
-          v->pulseWidth = ClampDouble(v->pulseWidth + v->pulseWidthDelta, 0.05, 0.95);
+          if(!v->sequenceGeneration){v->noisePhaseIncrement += v->noisePhaseIncrDelta;
+          v->pulseWidth = ClampDouble(v->pulseWidth + v->pulseWidthDelta, 0.05, 0.95);}
 
           // --- Pan sweep ---
-          if (v->panDelta != 0.0) {
+          if (!v->sequenceGeneration && v->panDelta != 0.0) {
             v->pan = ClampDouble(v->pan + v->panDelta, -1.0, 1.0);
             [module updatePanGainsForVoice:v];
           }
@@ -1627,10 +1638,11 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
         if (module->stats.tails > 0) for (int i = 0; i < module->engineMaxVoices; i++) {
           TailVoice *tail = &module->tails[i];
           if (!tail->isActive) continue;
+          double send=synth_send_tick(&tail->send);
           if (tail->spatial && tail->samplesRemaining <= 0) {
             float l, r;
             synth_spatial_process(&tail->spatialState, 0, &l, &r);
-            mixL += l; mixR += r;
+            mixL += l*(1-send); mixR += r*(1-send);selectedL+=l*send;selectedR+=r*send;
             if (--tail->spatialDrain <= 0) { tail->isActive = false; synth_stats_tail_end(&module->stats); }
             continue;
           }
@@ -1664,10 +1676,10 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
           if (tail->spatial) {
             float spatialL, spatialR;
             synth_spatial_process(&tail->spatialState, (float)sample, &spatialL, &spatialR);
-            mixL += spatialL; mixR += spatialR;
+            mixL += spatialL*(1-send); mixR += spatialR*(1-send);selectedL+=spatialL*send;selectedR+=spatialR*send;
           } else {
-            mixL += sample * tail->leftGain;
-            mixR += sample * tail->rightGain;
+            mixL += sample * tail->leftGain*(1-send);
+            mixR += sample * tail->rightGain*(1-send);selectedL+=sample*tail->leftGain*send;selectedR+=sample*tail->rightGain*send;
           }
           tail->phase += tail->phaseIncrement;
           tail->phase -= floor(tail->phase);
@@ -1683,10 +1695,9 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
         int laIdx = module->lookaheadIdx;
         double delayedL = module->lookaheadL[laIdx];
         double delayedR = module->lookaheadR[laIdx];
-        synth_effects_process(&module->effects,module->sequence->bpm,&mixL,&mixR);
-        double scaledL=mixL,scaledR=mixR;
-        synth_effects_finish(&module->effects,module->smoothedMasterGain,&scaledL,&scaledR);
-        synth_sequence_advance_sample(module->sequence);
+        double scaledL,scaledR;
+        synth_effects_process_routed(&module->effects,module->sequence->bpm,mixL,mixR,selectedL,selectedR,module->smoothedMasterGain,&scaledL,&scaledR);
+        synth_transport_advance_sample(module->sequence);
         module->lookaheadL[laIdx] = scaledL;
         module->lookaheadR[laIdx] = scaledR;
         module->lookaheadIdx = (laIdx + 1) % module->lookaheadSize;
@@ -1785,7 +1796,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
         }
       }
 
-      synth_sequence_publish_state(module->sequence);
+      for(int slot=0;slot<module->sequence->capacity;slot++)if(__atomic_load_n(&module->sequence->status[slot],__ATOMIC_ACQUIRE)==2)synth_sequence_publish_state(&module->sequence->slots[slot]);
       double seconds = measure ? (mach_absolute_time()-statsBegin) * (double)module->statsTimebase.numer / module->statsTimebase.denom * 1e-9 : 0;
       synth_stats_end(&module->stats,(int)frameCount,(int)module->engineSampleRate,seconds);
       return noErr;
@@ -1811,7 +1822,6 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     return @NO;
   }
   for(int i=0;i<3;i++) synth_stats_store(&statsRejected[i],0);
-  synth_stats_store(&droppedPatternSteps,0);
   return @YES;
   }
 }
@@ -1834,39 +1844,75 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   }
 }
 
+- (void)pruneVoiceMetadata
+{
+  NSMutableSet *retained=[NSMutableSet set];
+  os_unfair_lock_lock(&commandProducerLock);
+  uint32_t rd=atomic_load_explicit(&commandReadIndex,memory_order_acquire),wr=atomic_load_explicit(&commandWriteIndex,memory_order_acquire);
+  while(rd!=wr){SynthCommand *c=&commandQueue[rd];if(c->type==SYNTH_CMD_HELD_ON&&c->voiceId>0)[retained addObject:@(c->voiceId)];rd=(rd+1)%COMMAND_QUEUE_CAPACITY;}
+  for(int i=0;i<engineMaxVoices;i++){int32_t identifier=(int32_t)__atomic_load_n(&identities[i].voiceId,__ATOMIC_SEQ_CST);if(identifier>0&&synth_identity_mask(&identities[i],identifier)>=0)[retained addObject:@(identifier)];}
+  os_unfair_lock_unlock(&commandProducerLock);
+  for(NSNumber *identifier in [voiceGenerations allKeys])if(![retained containsObject:identifier]){[voiceGenerations removeObjectForKey:identifier];[voicePositions removeObjectForKey:identifier];[voiceSpatialModes removeObjectForKey:identifier];}
+}
+
+- (void)drainSequenceEvents
+{
+ @synchronized(self) {if(!sequence)return;
+  [self pruneVoiceMetadata];
+  SynthSequenceEnd end;while(synth_transport_pop_end(sequence,&end)) {
+  [sequenceOptions removeObjectForKey:@(end.sequenceId)];
+  [self fireEvent:@"sequenceend" withObject:@{@"sequenceId":@(end.sequenceId),@"reason":end.reason==SYNTH_SEQUENCE_COMPLETED?@"completed":@"stopped"}];
+ }}
+}
+- (NSNumber *)setTempo:(id)args
+{
+ @synchronized(self) {id raw=[args isKindOfClass:[NSArray class]]&&[args count]==1?args[0]:args;
+  if(!sequence||!audioEngine||![raw isKindOfClass:[NSDictionary class]]||[raw count]!=1)return @NO;
+  double bpm;id value=raw[@"bpm"];if(![value isKindOfClass:[NSNumber class]]||CFGetTypeID((__bridge CFTypeRef)value)==CFBooleanGetTypeID()||!ParseFiniteDoubleFromAny(value,&bpm)||bpm<20||bpm>300)return @NO;
+  return @(synth_transport_set_tempo(sequence,bpm));}
+}
 - (NSNumber *)playSequence:(id)args {return [self publishSequence:args restart:YES];}
 - (NSNumber *)updateSequence:(id)args {return [self publishSequence:args restart:NO];}
 - (NSNumber *)publishSequence:(id)args restart:(BOOL)restart
 {
  @synchronized(self) {
-  if(!audioEngine||!sequence)return @NO;
+  if(!audioEngine||!sequence)return restart?@0:@NO;
   id raw=[args isKindOfClass:[NSArray class]]&&[args count]==1?args[0]:args;
-  if(![raw isKindOfClass:[NSDictionary class]])return @NO;
-  NSMutableDictionary *merged=restart?[NSMutableDictionary dictionary]:[(sequenceOptions?:@{@"steps":@[@{@"rest":@YES}]}) mutableCopy];
-  [merged addEntriesFromDictionary:raw];
-  if(!restart&&raw[@"voice"]&&[raw[@"voice"] isKindOfClass:[NSDictionary class]]) {
-   merged[@"voice"]=[TiSynthengineContract mergeSequenceVoice:sequenceOptions[@"voice"]?:@{} changes:raw[@"voice"]];
+  if(![raw isKindOfClass:[NSDictionary class]])return restart?@0:@NO;
+  uint32_t identifier=0;
+  if(restart){if(nextSequenceId>=INT32_MAX)return @0;identifier=nextSequenceId+1;}
+  else {id value=raw[@"sequenceId"];double numeric;
+   if(![value isKindOfClass:[NSNumber class]]||CFGetTypeID((__bridge CFTypeRef)value)==CFBooleanGetTypeID()||!ParseFiniteDoubleFromAny(value,&numeric)||numeric<1||numeric>INT32_MAX||numeric!=floor(numeric))return @NO;
+   identifier=(uint32_t)numeric;if(!sequenceOptions[@(identifier)])return @NO;
   }
-  SynthSequenceConfig *bank=synth_sequence_begin_write(sequence);
-  if(!bank){__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);return @NO;}
+  NSMutableDictionary *changes=[raw mutableCopy];if(!restart)[changes removeObjectForKey:@"sequenceId"];
+  NSDictionary *previous=sequenceOptions[@(identifier)];
+  if(!restart&&changes[@"timeUnit"]&&![changes[@"timeUnit"] isEqual:previous[@"timeUnit"]?:@"beats"])return @NO;
+  NSMutableDictionary *merged=restart?[NSMutableDictionary dictionary]:[previous mutableCopy];[merged addEntriesFromDictionary:changes];
+  if(!restart&&[changes[@"voice"] isKindOfClass:[NSDictionary class]])merged[@"voice"]=[TiSynthengineContract mergeSequenceVoice:previous[@"voice"]?:@{} changes:changes[@"voice"]];
+  SynthSequenceConfig *bank=synth_transport_begin_write(sequence,identifier,restart);
+  if(!bank){__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);__atomic_fetch_add(&rejectedPublications,1,__ATOMIC_RELAXED);return restart?@0:@NO;}
   NSDictionary *failure=[TiSynthengineContract prepareSequence:merged config:bank maxFrequency:[self maxFrequencyHz]];
-  if(failure){synth_sequence_cancel_write(sequence,bank);[self acceptValidation:failure method:restart?@"playSequence":@"updateSequence"];return @NO;}
-  if(!synth_sequence_commit(sequence,bank,restart)){__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);return @NO;}
-  sequenceOptions=merged;
-  if(restart){atomic_fetch_add_explicit(&patternGeneration,1,memory_order_relaxed);if(atomic_exchange_explicit(&pendingPatternGeneration,0,memory_order_acq_rel))[self firePatternEnd:NO];}
-  return @YES;
+  if(failure){synth_transport_cancel_write(sequence,bank);[self acceptValidation:failure method:restart?@"playSequence":@"updateSequence"];return restart?@0:@NO;}
+  if(!synth_transport_commit(sequence,bank,restart)){__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);__atomic_fetch_add(&rejectedPublications,1,__ATOMIC_RELAXED);return restart?@0:@NO;}
+  sequenceOptions[@(identifier)]=merged;if(restart)nextSequenceId=identifier;
+  return restart?@(identifier):@YES;
  }
 }
 - (NSNumber *)stopSequence:(id)args
 {
- @synchronized(self) {(void)args;if(!sequence||!audioEngine)return @NO;synth_sequence_request_stop(sequence);return @YES;}
+ @synchronized(self) {id raw=[args isKindOfClass:[NSArray class]]&&[args count]==1?args[0]:args;
+  if(!sequence||!audioEngine||![raw isKindOfClass:[NSDictionary class]]||[raw count]!=1)return @NO;
+  double value;id identifier=raw[@"sequenceId"];if(![identifier isKindOfClass:[NSNumber class]]||CFGetTypeID((__bridge CFTypeRef)identifier)==CFBooleanGetTypeID()||!ParseFiniteDoubleFromAny(identifier,&value)||value<1||value>INT32_MAX||value!=floor(value))return @NO;
+  return @(synth_transport_request_stop(sequence,(uint32_t)value));}
 }
 - (NSDictionary *)getSequenceState:(id)args
 {
- @synchronized(self) {(void)args;
-  SynthSequenceState state={0};state.stepIndex=-1;state.bpm=120;if(sequence)state=synth_sequence_state(sequence);
-  return [TiSynthengineContract sequenceStateObject:&state];
- }
+ @synchronized(self) {id raw=[args isKindOfClass:[NSArray class]]&&[args count]==1?args[0]:args;
+  if(!sequence||![raw isKindOfClass:[NSDictionary class]]||[raw count]!=1)return nil;
+  double value;id identifier=raw[@"sequenceId"];if(![identifier isKindOfClass:[NSNumber class]]||CFGetTypeID((__bridge CFTypeRef)identifier)==CFBooleanGetTypeID()||!ParseFiniteDoubleFromAny(identifier,&value)||value<1||value>INT32_MAX||value!=floor(value))return nil;
+  SynthSequenceState state;if(!synth_transport_state(sequence,(uint32_t)value,&state))return nil;
+  NSMutableDictionary *result=[[TiSynthengineContract sequenceStateObject:&state] mutableCopy];result[@"sequenceId"]=@((uint32_t)value);return result;}
 }
 - (NSNumber *)setMasterProcessing:(id)args
 {
@@ -1881,44 +1927,27 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   processingOptions=next;return @YES;
  }
 }
-/* Continuous settings apply at a block boundary; structure still waits for a step. */
-- (void)updateSequenceVoices
+- (BOOL)sequenceGateEnded:(SynthVoice *)voice
 {
- int bank=sequence->pending>=0?sequence->pending:sequence->active;if(bank<0)return;
- const SynthSequenceConfig *config=&sequence->banks[bank];if(sequenceAppliedRevision==config->revision)return;
- sequenceAppliedRevision=config->revision;
- for(int i=0;i<engineMaxVoices;i++) {
-  SynthVoice *v=&voices[i];if(!v->isActive||!v->sequenceGeneration||v->sequenceStep>=config->stepCount)continue;
-  const SynthSequenceVoice *settings=&config->steps[v->sequenceStep].voice;
-  SynthCommand c=StudioSequenceCommand(settings,engineSampleRate);
-  double values[SYNTH_LIVE_COUNT]={synth_sequence_frequency(config,v->sequenceMidi),c.volume,c.filterHz,c.filterQ,c.lfoFreq,c.lfoDepth,c.pulseWidth,c.fmRatio,c.fmDepth};
-  uint32_t mask=synth_live_allowed(v->waveType,v->svf.type)&synth_live_allowed(c.waveType,c.filterType);
-  synth_live_update(&v->live,mask,values,MAX(1,MsToSamples(10,engineSampleRate)));
-  if(synth_modulation_set_config(&v->modulation,&c.modulation,StudioModCapabilities(v->waveType,v->svf.type)))v->modulating=YES;
- }
+ return (voice->sequenceTimeUnit==SYNTH_SEQUENCE_MS?sequence->milliseconds:sequence->beat)+1e-10>=voice->sequenceOffBeat;
 }
-/* Audio-thread only. Scheduled gates belong to voice slots and never consume
- * public queue capacity; stealing a slot replaces its gate at the same time. */
 - (void)renderSequenceFrame
 {
- SynthSequenceEvent event;
- BOOL emitted=synth_sequence_tick(sequence,&event);
- // Gates ending at this sample become releasing before slot selection.
- if(emitted)for(int i=0;i<engineMaxVoices;i++) {
-  SynthVoice *v=&voices[i];
-  if(v->isActive&&v->sequenceGeneration&&!v->held.releasing&&
-    (v->sequenceGeneration!=sequence->generation||sequence->beat+1e-10>=v->sequenceOffBeat))
-   synth_held_release(&v->held,v->currentEnvelope);
- }
- if(emitted&&event.noteCount) {
-  const SynthSequenceConfig *config=&sequence->banks[event.bank];
-  const SynthSequenceVoice *settings=&config->steps[event.stepIndex].voice;
+ for(int slot=0;slot<sequence->capacity;slot++) {
+  if(!(sequence->activeMask&(1u<<slot)))continue;
+  SynthSequenceEvent event;SynthSequenceTransport *t=&sequence->slots[slot];
+  BOOL emitted=synth_transport_tick(sequence,slot,&event);
+  if(!emitted||!event.noteCount)continue;
+  for(int i=0;i<engineMaxVoices;i++){SynthVoice *v=&voices[i];if(v->isActive&&v->sequenceGeneration&&!v->held.releasing&&[self sequenceGateEnded:v])synth_held_release(&v->held,v->currentEnvelope);}
+  const SynthSequenceConfig *config=&t->banks[event.bank];const SynthSequenceVoice *settings=&config->steps[event.stepIndex].voice;
+  if(![self canAdmitCount:event.noteCount priority:settings->priority]){__atomic_fetch_add(&priorityDrops,1,__ATOMIC_RELAXED);continue;}
+  batchOrder=voiceOrder;batchRemaining=event.noteCount;
   for(int n=0;n<event.noteCount;n++) {
    SynthCommand cmd=StudioSequenceCommand(settings,engineSampleRate);
    if(sequenceVoiceId==INT32_MIN)sequenceVoiceId=0;cmd.voiceId=--sequenceVoiceId;
-   cmd.frequency=synth_sequence_frequency(config,event.notes[n]);cmd.eventVoiceCount=event.noteCount;
-   cmd.sequenceGeneration=event.generation;cmd.sequenceOffBeat=event.gateEndBeat;cmd.sequenceStep=event.stepIndex;cmd.sequenceMidi=event.notes[n];
-   [self startVoiceFromCommand:&cmd];
+   cmd.frequency=event.frequencies[n]>0?event.frequencies[n]:synth_sequence_frequency(config,event.notes[n]);cmd.eventVoiceCount=event.noteCount;
+   cmd.sequenceId=event.sequenceId;cmd.sequenceTimeUnit=config->timeUnit;cmd.sequenceSlot=slot;cmd.sequenceGeneration=event.generation;cmd.sequenceOffBeat=(config->timeUnit==SYNTH_SEQUENCE_MS?sequence->milliseconds:sequence->beat)+event.length;cmd.sequenceStep=event.stepIndex;cmd.sequenceMidi=event.notes[n];
+   [self startVoiceFromCommand:&cmd];batchRemaining--;
   }
  }
 }
@@ -1943,7 +1972,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
     if(![raw isKindOfClass:[NSDictionary class]]){__atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED);return @NO;}
     if(![self acceptValidation:[TiSynthengineContract validateNoteOff:raw] method:@"noteOff"])return @NO;
-    SynthCommand cmd; memset(&cmd,0,sizeof(cmd));cmd.type=SYNTH_CMD_HELD_OFF;cmd.voiceId=[raw[@"voiceId"] intValue];
+    SynthCommand cmd; memset(&cmd,0,sizeof(cmd));cmd.type=SYNTH_CMD_HELD_OFF;cmd.voiceId=[raw[@"voiceId"] intValue];cmd.voiceGeneration=[voiceGenerations[@(cmd.voiceId)] unsignedLongLongValue];
     BOOL full=[self enqueueCommand:cmd];if(full)__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);
     return full ? @NO : @YES;
   }
@@ -1956,9 +1985,15 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
     if(![raw isKindOfClass:[NSDictionary class]]){__atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED);return @NO;}
     if(![self acceptValidation:[TiSynthengineContract validateUpdateVoice:raw maxFrequency:[self maxFrequencyHz]] method:@"updateVoice"])return @NO;
-    NSArray *keys=@[@"frequency",@"volume",@"filterHz",@"filterQ",@"lfoFreq",@"lfoDepth",@"pulseWidth",@"fmRatio",@"fmDepth"];
-    SynthCommand cmd;memset(&cmd,0,sizeof(cmd));cmd.type=SYNTH_CMD_HELD_UPDATE;cmd.voiceId=[raw[@"voiceId"] intValue];
+    NSNumber *spatialMode=voiceSpatialModes[raw[@"voiceId"]];
+    if(spatialMode&&(([spatialMode boolValue]&&raw[@"pan"])||(![spatialMode boolValue]&&(raw[@"spatialX"]||raw[@"spatialY"]))))return @NO;
+    NSArray *keys=@[@"frequency",@"volume",@"filterHz",@"filterQ",@"lfoFreq",@"lfoDepth",@"pulseWidth",@"fmRatio",@"fmDepth",@"noiseRate",@"lowPassHz",@"pan"];
+    SynthCommand cmd;memset(&cmd,0,sizeof(cmd));cmd.type=SYNTH_CMD_HELD_UPDATE;cmd.voiceId=[raw[@"voiceId"] intValue];cmd.voiceGeneration=[voiceGenerations[@(cmd.voiceId)] unsignedLongLongValue];
     for(int i=0;i<SYNTH_LIVE_COUNT;i++)if(raw[keys[i]]){cmd.liveMask|=1u<<i;cmd.liveValues[i]=[raw[keys[i]] doubleValue];}
+    if(raw[@"noiseRate"])cmd.liveValues[LIVE_NOISE_RATE]=[raw[@"noiseRate"] doubleValue]>0?[raw[@"noiseRate"] doubleValue]/engineSampleRate:1;
+    if(raw[@"lowPassHz"])cmd.liveValues[LIVE_LOWPASS_HZ]=[raw[@"lowPassHz"] doubleValue]>0?1-exp(-2*M_PI*[raw[@"lowPassHz"] doubleValue]/engineSampleRate):1;
+    if(raw[@"effectSend"]){cmd.hasSendUpdate=YES;cmd.effectSend=[raw[@"effectSend"] doubleValue];}
+    if(raw[@"spatialX"]||raw[@"spatialY"]){NSArray *previous=voicePositions[@(cmd.voiceId)]?:@[@0,@0];double x=raw[@"spatialX"]?[raw[@"spatialX"] doubleValue]:[previous[0] doubleValue],y=raw[@"spatialY"]?[raw[@"spatialY"] doubleValue]:[previous[1] doubleValue];cmd.hasSpatialUpdate=YES;synth_spatial_prepare(&cmd.preparedSpatial,x,y,engineSampleRate);cmd.spatialX=x;cmd.spatialY=y;}
     if(raw[@"note"]){cmd.liveMask|=1u<<LIVE_FREQUENCY;cmd.liveValues[LIVE_FREQUENCY]=ParseNoteToFrequency(raw[@"note"]);}
     if(raw[@"modulations"]) {
       double mods[12];[TiSynthengineContract prepareModulations:raw[@"modulations"] values:mods waveType:-1 filterType:-1];
@@ -1968,6 +2003,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     if(allowed>=0 && cmd.hasModulations && !synth_modulation_validate(&cmd.modulation,StudioModCapabilitiesFromMask(allowed)))return @NO;
     if(allowed>=0 && (cmd.liveMask & ~(uint32_t)allowed)){[self acceptValidation:@{@"key":@"changes",@"reason":@"incompatible_voice_source",@"value":raw} method:@"updateVoice"];return @NO;}
     BOOL full=[self enqueueCommand:cmd];if(full)__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);
+    else if(cmd.hasSpatialUpdate)voicePositions[@(cmd.voiceId)]=@[@(cmd.spatialX),@(cmd.spatialY)];
     return full ? @NO : @YES;
   }
 }
@@ -1991,6 +2027,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   memset(&cmd, 0, sizeof(cmd));
   cmd.type = voiceId ? SYNTH_CMD_HELD_ON : CMD_NOTE_ON;
   cmd.voiceId=voiceId;
+  cmd.bus=(int)[@[@"music",@"effects",@"ui",@"ambience"] indexOfObject:options[@"bus"]?:@"effects"];cmd.effectSend=options[@"effectSend"]?[options[@"effectSend"] doubleValue]:-1;cmd.priority=[options[@"priority"] intValue];
   if(options[@"modulations"]) {
     double mods[12];[TiSynthengineContract prepareModulations:options[@"modulations"] values:mods waveType:-1 filterType:-1];
     cmd.modulation=StudioModulationFromValues(mods);cmd.hasModulations=YES;
@@ -2104,7 +2141,9 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   int maxReleaseSamples = MAX(0, cmd.durationSamples - cmd.attackSamples);
   if (cmd.releaseSamples > maxReleaseSamples) cmd.releaseSamples = maxReleaseSamples;
 
+  if(voiceId){if(![self heldPriorityAllows:voiceId priority:cmd.priority]){__atomic_fetch_add(&priorityDrops,1,__ATOMIC_RELAXED);return @YES;}cmd.voiceGeneration=++nextVoiceGeneration;}
   BOOL dropped = [self enqueueCommand:cmd];
+  if(!dropped&&voiceId){voiceGenerations[@(voiceId)]=@(cmd.voiceGeneration);voiceSpatialModes[@(voiceId)]=@(cmd.spatial);voicePositions[@(voiceId)]=@[@(cmd.spatialX),@(cmd.spatialY)];if(voiceGenerations.count>256)[self pruneVoiceMetadata];}
   if (dropped) {
     [self warnOnceMethod:@"playTone" key:@"queue" reason:@"overflow"
                    value:@"command_queue_full" action:@"drop_newest"];
@@ -2203,6 +2242,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     SynthCommand cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.type           = CMD_NOTE_ON;
+    cmd.bus=(int)[@[@"music",@"effects",@"ui",@"ambience"] indexOfObject:options[@"bus"]?:@"effects"];cmd.effectSend=options[@"effectSend"]?[options[@"effectSend"] doubleValue]:-1;cmd.priority=[options[@"priority"] intValue];
     cmd.frequency      = freq;
     cmd.durationSamples= durSamples;
     cmd.attackSamples  = attackSamples;
@@ -2223,7 +2263,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     }
     ApplyExpressiveParams(&cmd, &expressive, engineSampleRate);
 
-    chordCommands[i] = cmd;
+    cmd.sequenceStep=(i==0)?1:0;chordCommands[i] = cmd;
   }
 
   // Publish the chord with one release-store so the audio callback observes
@@ -2252,292 +2292,6 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   }
 }
 
-- (NSNumber *)playPattern:(id)args
-{
-  @synchronized(self) {
-  if (audioEngine == nil || engineMaxVoices < 1) { __atomic_fetch_add(&statsRejected[1],1,__ATOMIC_RELAXED); return @NO; }
-
-  id raw=[args isKindOfClass:[NSArray class]] && [args count]==1 ? args[0] : args;
-  if(![raw isKindOfClass:[NSDictionary class]]) { __atomic_fetch_add(&statsRejected[0],1,__ATOMIC_RELAXED); return @NO; }
-  NSDictionary *options=raw;
-  if (![self acceptValidation:[TiSynthengineContract validatePattern:options
-                                                           maxFrequency:[self maxFrequencyHz]]
-                       method:@"playPattern"]) return @NO;
-  synth_sequence_request_stop(sequence);
-  id stepsObj = [options objectForKey:@"steps"];
-  if (![stepsObj isKindOfClass:[NSArray class]]) return @NO;
-  NSArray *steps = (NSArray *)stepsObj;
-  if (steps.count == 0) return @NO;
-  NSUInteger stepCount = MIN(steps.count, (NSUInteger)PATTERN_MAX_STEPS);
-  if (steps.count > PATTERN_MAX_STEPS) {
-    [self warnOnceMethod:@"playPattern" key:@"steps" reason:@"too_many_steps"
-                   value:@(steps.count) action:@"truncated_to_512"];
-  }
-
-  uint32_t generation = atomic_fetch_add_explicit(&patternGeneration, 1,
-                                                   memory_order_relaxed) + 1;
-  // The previous pattern, if it had not ended, is replaced by this one.
-  if (atomic_exchange_explicit(&pendingPatternGeneration, generation,
-                               memory_order_acq_rel) != 0) {
-    [self firePatternEnd:NO];
-  }
-  double bpm = 120.0;
-  double swing = 0.0;
-  id bpmObj = [options objectForKey:@"bpm"];
-  if (bpmObj) {
-    double bv = 0.0;
-    if (ParseFiniteDoubleFromAny(bpmObj, &bv)) bpm = ClampDouble(bv, 20.0, 300.0);
-  }
-  id swingObj = [options objectForKey:@"swing"];
-  if (swingObj) {
-    double sv = 0.0;
-    if (ParseFiniteDoubleFromAny(swingObj, &sv)) swing = ClampDouble(sv, -0.49, 0.49);
-  }
-
-  double quarter = 60000.0 / bpm;
-  double maxFreq = [self maxFrequencyHz];
-  id globalNoteValue = [options objectForKey:@"noteValue"];
-  double globalStepDuration = 0.0;
-  BOOL hasGlobalStepDuration = ParseFiniteDoubleFromAny(
-      [options objectForKey:@"stepDuration"], &globalStepDuration)
-      && globalStepDuration > 0.0;
-
-  NSInteger globalAttack = ATTACK_DEFAULT_MS;
-  NSInteger globalRelease = RELEASE_DEFAULT_MS;
-  NSInteger globalWaveType = 0;
-  double globalVolume = VOLUME_DEFAULT;
-  double globalPan = 0.0;
-  double globalPanEnd = 0.0;
-  double globalFrequencyEnd = 0.0;
-  double globalLfoFreq = 0.0;
-  double globalLfoDepth = 0.0;
-  double globalNoiseRate = 0.0;
-  double globalNoiseRateEnd = 0.0;
-  double globalLowPassHz = 0.0;
-  double globalPulseWidth = 0.5;
-  double globalPulseWidthEnd = 0.0;
-  NSInteger globalBitDepth = 0;
-  double globalWavetable[WAVETABLE_MAX_SAMPLES] = {0};
-  int globalWavetableSize = 0;
-  [self readOptionalIntegerFrom:options method:@"playPattern" key:@"attack"
-                   defaultValue:ATTACK_DEFAULT_MS min:ATTACK_MIN_MS max:ATTACK_MAX_MS
-                            out:&globalAttack];
-  [self readOptionalIntegerFrom:options method:@"playPattern" key:@"release"
-                   defaultValue:RELEASE_DEFAULT_MS min:RELEASE_MIN_MS max:RELEASE_MAX_MS
-                            out:&globalRelease];
-  [self readOptionalDoubleFrom:options method:@"playPattern" key:@"volume"
-                  defaultValue:VOLUME_DEFAULT min:VOLUME_MIN max:VOLUME_MAX
-                           out:&globalVolume];
-  [self readOptionalIntegerFrom:options method:@"playPattern" key:@"waveType"
-                   defaultValue:0 min:0 max:5 out:&globalWaveType];
-  [self readOptionalDoubleFrom:options method:@"playPattern" key:@"pan"
-                  defaultValue:0.0 min:-1.0 max:1.0 out:&globalPan];
-  [self readOptionalDoubleFrom:options method:@"playPattern" key:@"panEnd"
-                  defaultValue:globalPan min:-1.0 max:1.0 out:&globalPanEnd];
-  [self readOptionalDoubleFrom:options method:@"playPattern" key:@"frequencyEnd"
-                  defaultValue:0.0 min:0.0 max:maxFreq out:&globalFrequencyEnd];
-  [self readOptionalDoubleFrom:options method:@"playPattern" key:@"lfoFreq"
-                  defaultValue:0.0 min:0.0 max:20000.0 out:&globalLfoFreq];
-  [self readOptionalDoubleFrom:options method:@"playPattern" key:@"lfoDepth"
-                  defaultValue:0.0 min:0.0 max:20000.0 out:&globalLfoDepth];
-  [self readOptionalDoubleFrom:options method:@"playPattern" key:@"noiseRate"
-                  defaultValue:0.0 min:0.0 max:maxFreq out:&globalNoiseRate];
-  [self readOptionalDoubleFrom:options method:@"playPattern" key:@"noiseRateEnd"
-                  defaultValue:0.0 min:0.0 max:maxFreq out:&globalNoiseRateEnd];
-  [self readOptionalDoubleFrom:options method:@"playPattern" key:@"lowPassHz"
-                  defaultValue:0.0 min:0.0 max:maxFreq out:&globalLowPassHz];
-  [self readOptionalDoubleFrom:options method:@"playPattern" key:@"pulseWidth"
-                  defaultValue:0.5 min:0.05 max:0.95 out:&globalPulseWidth];
-  [self readOptionalDoubleFrom:options method:@"playPattern" key:@"pulseWidthEnd"
-                  defaultValue:0.0 min:0.0 max:0.95 out:&globalPulseWidthEnd];
-  [self readOptionalIntegerFrom:options method:@"playPattern" key:@"bitDepth"
-                   defaultValue:0 min:0 max:16 out:&globalBitDepth];
-  CopyWaveTableFromOptions(options, NULL, 0, globalWavetable,
-                           &globalWavetableSize);
-  ExpressiveParams globalExpressive = ReadExpressiveParams(options, ExpressiveDefaults());
-
-  dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0);
-  double cumulativeMs = 0.0;
-
-  for (NSUInteger i = 0; i < stepCount; i++) {
-    id stepObj = steps[i];
-    NSDictionary *step = nil;
-    if ([stepObj isKindOfClass:[NSDictionary class]]) {
-      step = (NSDictionary *)stepObj;
-    }
-    if (step == nil) continue;
-
-    double stepMs = 100.0;
-    double numericTiming = 0.0;
-    id durationObj = [step objectForKey:@"duration"];
-    id stepNoteValue = [step objectForKey:@"noteValue"];
-    if (ParseFiniteDoubleFromAny(durationObj, &numericTiming) && numericTiming > 0.0) {
-      stepMs = numericTiming;
-    } else if (stepNoteValue != nil) {
-      stepMs = ComputeNoteValueMs([stepNoteValue description], quarter);
-    } else if (globalNoteValue != nil) {
-      stepMs = ComputeNoteValueMs([globalNoteValue description], quarter);
-    } else if (hasGlobalStepDuration) {
-      stepMs = globalStepDuration;
-    }
-    stepMs = ClampDouble(stepMs, DURATION_MIN_MS, DURATION_MAX_MS);
-
-    double swingOffsetMs = 0.0;
-    if (swing != 0.0) {
-      swingOffsetMs = (i % 2 == 0) ? swing * stepMs : -swing * stepMs;
-    }
-
-    double freq   = 0.0;
-    BOOL   isRest = YES;
-    id freqObj = [step objectForKey:@"frequency"];
-    id noteObj = [step objectForKey:@"note"];
-    BOOL explicitRest = [[step objectForKey:@"rest"] boolValue];
-    if (!explicitRest && freqObj) {
-      double fv = 0.0;
-      if (ParseFiniteDoubleFromAny(freqObj, &fv) && fv >= MIN_FREQUENCY_HZ) {
-        freq   = ClampDouble(fv, MIN_FREQUENCY_HZ, maxFreq);
-        isRest = NO;
-      }
-    } else if (!explicitRest && noteObj) {
-      NSString *noteStr = [noteObj isKindOfClass:[NSString class]]
-                        ? (NSString *)noteObj : [noteObj description];
-      double f = ParseNoteToFrequency(noteStr);
-      if (f >= MIN_FREQUENCY_HZ) {
-        freq   = ClampDouble(f, MIN_FREQUENCY_HZ, maxFreq);
-        isRest = NO;
-      }
-    }
-
-    if (!isRest) {
-      int dur = (int)llround(stepMs);
-      NSInteger attackMs = globalAttack;
-      NSInteger releaseMs = globalRelease;
-      NSInteger waveType = globalWaveType;
-      double volume = globalVolume;
-      double pan = globalPan;
-      double panEnd = globalPanEnd;
-      double frequencyEnd = globalFrequencyEnd;
-      double lfoFreq = globalLfoFreq;
-      double lfoDepth = globalLfoDepth;
-      double noiseRate = globalNoiseRate;
-      double noiseRateEnd = globalNoiseRateEnd;
-      double lowPassHz = globalLowPassHz;
-      double pulseWidth = globalPulseWidth;
-      double pulseWidthEnd = globalPulseWidthEnd;
-      NSInteger bitDepth = globalBitDepth;
-      [self readOptionalIntegerFrom:step method:@"step" key:@"attack"
-                       defaultValue:globalAttack min:ATTACK_MIN_MS max:ATTACK_MAX_MS out:&attackMs];
-      [self readOptionalIntegerFrom:step method:@"step" key:@"release"
-                       defaultValue:globalRelease min:RELEASE_MIN_MS max:RELEASE_MAX_MS out:&releaseMs];
-      [self readOptionalDoubleFrom:step method:@"step" key:@"volume"
-                      defaultValue:globalVolume min:VOLUME_MIN max:VOLUME_MAX out:&volume];
-      [self readOptionalIntegerFrom:step method:@"step" key:@"waveType"
-                       defaultValue:globalWaveType min:0 max:5 out:&waveType];
-      [self readOptionalDoubleFrom:step method:@"step" key:@"pan"
-                      defaultValue:globalPan min:-1.0 max:1.0 out:&pan];
-      [self readOptionalDoubleFrom:step method:@"step" key:@"panEnd"
-                      defaultValue:globalPanEnd min:-1.0 max:1.0 out:&panEnd];
-      [self readOptionalDoubleFrom:step method:@"step" key:@"frequencyEnd"
-                      defaultValue:globalFrequencyEnd min:0.0 max:maxFreq out:&frequencyEnd];
-      [self readOptionalDoubleFrom:step method:@"step" key:@"lfoFreq"
-                      defaultValue:globalLfoFreq min:0.0 max:20000.0 out:&lfoFreq];
-      [self readOptionalDoubleFrom:step method:@"step" key:@"lfoDepth"
-                      defaultValue:globalLfoDepth min:0.0 max:20000.0 out:&lfoDepth];
-      [self readOptionalDoubleFrom:step method:@"step" key:@"noiseRate"
-                      defaultValue:globalNoiseRate min:0.0 max:maxFreq out:&noiseRate];
-      [self readOptionalDoubleFrom:step method:@"step" key:@"noiseRateEnd"
-                      defaultValue:globalNoiseRateEnd min:0.0 max:maxFreq out:&noiseRateEnd];
-      [self readOptionalDoubleFrom:step method:@"step" key:@"lowPassHz"
-                      defaultValue:globalLowPassHz min:0.0 max:maxFreq out:&lowPassHz];
-      [self readOptionalDoubleFrom:step method:@"step" key:@"pulseWidth"
-                      defaultValue:globalPulseWidth min:0.05 max:0.95 out:&pulseWidth];
-      [self readOptionalDoubleFrom:step method:@"step" key:@"pulseWidthEnd"
-                      defaultValue:globalPulseWidthEnd min:0.0 max:0.95 out:&pulseWidthEnd];
-      [self readOptionalIntegerFrom:step method:@"step" key:@"bitDepth"
-                       defaultValue:globalBitDepth min:0 max:16 out:&bitDepth];
-      ExpressiveParams expressive = ReadExpressiveParams(step, globalExpressive);
-      freq = DetunedFrequency(freq, expressive.detune, maxFreq);
-      if (frequencyEnd > 0.0) {
-        frequencyEnd = DetunedFrequency(frequencyEnd, expressive.detune, maxFreq);
-      }
-
-      if (attackMs >= dur) attackMs = MAX(0, dur - 1);
-      NSInteger maxRel = MAX(0, dur - attackMs);
-      if (releaseMs > maxRel) releaseMs = maxRel;
-
-      int durSamples     = MAX(1, MsToSamples(dur,           engineSampleRate));
-      int attackSamples  = MAX(1, MsToSamples((int)attackMs, engineSampleRate));
-      int releaseSamples = MAX(1, MsToSamples((int)releaseMs,engineSampleRate));
-      if (attackSamples  > MAX(0, durSamples - 1))             attackSamples  = MAX(0, durSamples - 1);
-      if (releaseSamples > MAX(0, durSamples - attackSamples)) releaseSamples = MAX(0, durSamples - attackSamples);
-
-      SynthCommand cmd;
-      memset(&cmd, 0, sizeof(cmd));
-      cmd.type           = CMD_NOTE_ON;
-      cmd.frequency      = freq;
-      cmd.durationSamples= durSamples;
-      cmd.attackSamples  = attackSamples;
-      cmd.releaseSamples = releaseSamples;
-      cmd.volume         = volume;
-      cmd.waveType       = (int)waveType;
-      cmd.pan            = pan;
-      cmd.panEnd         = panEnd;
-      cmd.frequencyEnd   = frequencyEnd;
-      cmd.lfoFreq        = lfoFreq;
-      cmd.lfoDepth       = lfoDepth;
-      cmd.noiseRate      = noiseRate;
-      cmd.noiseRateEnd   = noiseRateEnd;
-      cmd.lowPassHz      = lowPassHz;
-      cmd.pulseWidth     = pulseWidth;
-      cmd.pulseWidthEnd  = pulseWidthEnd;
-      cmd.bitDepth       = (int)bitDepth;
-      CopyWaveTableFromOptions(step, globalWavetable, globalWavetableSize,
-                               cmd.wavetable, &cmd.wavetableSize);
-      ApplyExpressiveParams(&cmd, &expressive, engineSampleRate);
-
-      double schedMs = cumulativeMs + swingOffsetMs;
-      if (schedMs < 0.0) schedMs = 0.0;
-
-      int64_t delayNs = (int64_t)(schedMs * 1e6);
-      __weak TiSynthengineModule *weakSelf = self;
-
-      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delayNs), q, ^{
-        TiSynthengineModule *owner=weakSelf;
-        if(owner == nil) return;
-        @synchronized(owner) {
-        // Check generation — skip if a newer pattern has been started
-        if (atomic_load_explicit(&owner->patternGeneration, memory_order_relaxed)
-            != generation) return;
-        if(owner->audioEngine == nil) return;
-        BOOL dropped = [owner enqueueCommand:cmd];
-        if (dropped) {
-          __atomic_fetch_add(&owner->droppedPatternSteps,1,__ATOMIC_RELAXED);
-          [owner warnOnceMethod:@"playPattern" key:@"queue" reason:@"overflow"
-                             value:@"command_queue_full" action:@"drop_newest"];
-        }
-        }
-      });
-    }
-
-    cumulativeMs += stepMs;
-  }
-
-  // The same end instant Android uses: the summed step lengths, rounded up, plus 1 ms.
-  int64_t endDelayNs = ((int64_t)ceil(cumulativeMs) + 1) * 1000000;
-  __weak TiSynthengineModule *endSelf = self;
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, endDelayNs), dispatch_get_main_queue(), ^{
-    TiSynthengineModule *module = endSelf;
-    if (module == nil) return;
-    uint32_t expected = generation;
-    if (atomic_compare_exchange_strong_explicit(&module->pendingPatternGeneration, &expected, 0,
-                                                memory_order_acq_rel, memory_order_relaxed)) {
-      [module fireEvent:@"patternend" withObject:@{ @"completed": @YES }];
-    }
-  });
-  return @YES;
-  }
-}
-
 - (void)stopAll:(id)args
 {
   @synchronized(self) {
@@ -2558,8 +2312,6 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   if (audioEngine == nil) return;
 
   // Cancel any pending pattern dispatches; a closing owner gets no patternend
-  atomic_fetch_add_explicit(&patternGeneration, 1, memory_order_relaxed);
-  atomic_store_explicit(&pendingPatternGeneration, 0, memory_order_release);
 
   BOOL dropped = [self enqueueSimpleCommand:CMD_SHUTDOWN];
   if (dropped) {
@@ -2568,10 +2320,12 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   }
 
   [audioEngine stop];
+  if(sequenceEventTimer){dispatch_source_cancel(sequenceEventTimer);sequenceEventTimer=nil;}
   synth_effects_destroy(&effects);if(sequence){free(sequence);sequence=NULL;}sequenceOptions=nil;
   synth_stats_stopped(&stats);
   sourceNode  = nil;
   audioEngine = nil;
+  [voiceGenerations removeAllObjects];[voicePositions removeAllObjects];[voiceSpatialModes removeAllObjects];
 
   if (lookaheadL) { free(lookaheadL); lookaheadL = NULL; }
   if (lookaheadR) { free(lookaheadR); lookaheadR = NULL; }
@@ -2588,16 +2342,6 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
 // ---------------------------------------------------------------------------
 #pragma mark - Private helpers
 // ---------------------------------------------------------------------------
-
-// Delivered on the main queue, like the natural-end event, so listeners always
-// run in the same context.
-- (void)firePatternEnd:(BOOL)completed
-{
-  __weak TiSynthengineModule *weakSelf = self;
-  dispatch_async(dispatch_get_main_queue(), ^{
-    [weakSelf fireEvent:@"patternend" withObject:@{ @"completed": @(completed) }];
-  });
-}
 
 // Parse "frequencies" or "notes" array from options dict → NSArray of NSNumber
 - (NSArray *)parseFreqArray:(NSDictionary *)options method:(NSString *)method maxFreq:(double)maxFreq

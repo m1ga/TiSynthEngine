@@ -2,8 +2,8 @@
 #import <Foundation/Foundation.h>
 #import "../ios/Classes/TiSynthengineContract.h"
 #include <assert.h>
-int main(void) { @autoreleasepool {
- NSString *source=[NSString stringWithContentsOfFile:@"tests/studio_contract_corpus.jsonl" encoding:NSUTF8StringEncoding error:NULL];assert(source);
+int main(int argc,char **argv) { @autoreleasepool {
+ NSString *source=[NSString stringWithContentsOfFile:(argc>1?[NSString stringWithUTF8String:argv[1]]:@"tests/studio_contract_corpus.jsonl") encoding:NSUTF8StringEncoding error:NULL];assert(source);
  int count=0,failures=0;
  SynthSequenceConfig *config=calloc(1,sizeof(*config));
  for(NSString *line in [source componentsSeparatedByString:@"\n"]) {

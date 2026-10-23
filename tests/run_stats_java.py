@@ -9,6 +9,8 @@ root=Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory() as folder:
  p=Path(folder)
  sources={
+ 'android/os/Looper.java':'package android.os; public class Looper { public static Looper getMainLooper(){return new Looper();} }',
+ 'android/os/Handler.java':'package android.os; public class Handler { public Handler(Looper l){} public boolean post(Runnable r){return true;} public boolean postDelayed(Runnable r,long t){return true;} public void removeCallbacks(Runnable r){} }',
  'android/util/Log.java':'package android.util; public class Log { public static int w(String t,String m){return 0;} }',
  'org/appcelerator/kroll/KrollDict.java':'package org.appcelerator.kroll; public class KrollDict extends java.util.HashMap<String,Object> { public KrollDict(){} public KrollDict(java.util.HashMap<String,Object> m){super(m);} }',
  'org/appcelerator/kroll/KrollModule.java':'package org.appcelerator.kroll; public class KrollModule { public void fireEvent(String n,KrollDict d){} }',
@@ -25,13 +27,13 @@ public class StatsApiRegression {
   check(m.getStats().containsKey("renderLoad") && m.getStats().get("renderLoad")==null);
   check(m.setStatsEnabled(Boolean.TRUE)); check(!m.setStatsEnabled("true"));
   check(!m.playTone(new KrollDict())); check(!m.playChord(new KrollDict()));
-  check(!m.playPattern(new KrollDict())); check(!m.setVolume(new KrollDict()));
+  check(m.playSequence(new KrollDict())==0); check(!m.setVolume(new KrollDict()));
   KrollDict s=m.getStats(), r=(KrollDict)s.get("rejectedRequestsByReason");
   check(n(s,"rejectedRequestCount")==5 && n(r,"engineStopped")==4 && n(r,"validation")==1 && n(r,"queueFull")==0);
   check(n(m.getStats(),"rejectedRequestCount")==5); // reads never reset
   m.resetStats(); check(n(m.getStats(),"rejectedRequestCount")==0);
   check(m.getStats().get("renderLoad")==null);
-  check(!m.startEngine(new KrollDict(){{put("maxVoices",100);}}));
+  check(!m.start(new KrollDict(){{put("maxVoices",100);}}));
   check(n(m.getStats(),"rejectedRequestCount")==1);
   m.shutdown(); check(n(m.getStats(),"rejectedRequestCount")==1);
   System.out.println("StatsApiRegression: passed");

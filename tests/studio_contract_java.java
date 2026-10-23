@@ -5,16 +5,16 @@ class StudioContractRegression {
  static void check(boolean b){if(!b)throw new AssertionError();}
  static void rejects(Runnable r){try{r.run();throw new AssertionError("accepted invalid config");}catch(IllegalArgumentException expected){}}
  public static void main(String[] args){
-  Map<String,Object> source=m("steps",new Object[]{m("notes",new Object[]{60,60,67}),m("rest",true)},"bpm",137);
+  Map<String,Object> source=m("steps",new Object[]{m("notes",new Object[]{60,60,67}),m("rest",true)},"swing",.137);
   SynthStudioContract.Sequence s=SynthStudioContract.sequence(source,null,true,20000);
-  check(s.packet[0]==2&&s.packet[7]==3&&s.packet[10]==60&&s.packet[11]==60);
-  source.put("bpm",200);check(((Number)s.options.get("bpm")).intValue()==137);
-  SynthStudioContract.Sequence edited=SynthStudioContract.sequence(m("bpm",240),s,false,20000);check(edited.packet[1]==240&&edited.packet[0]==2);
+  check(s.packet[0]==2&&s.packet[9]==3&&s.packet[12]==60&&s.packet[13]==60);
+  source.put("swing",.2);check(((Number)s.options.get("swing")).doubleValue()==.137);
+  SynthStudioContract.Sequence edited=SynthStudioContract.sequence(m("swing",.24),s,false,20000);check(edited.packet[2]==.24&&edited.packet[0]==2);
   rejects(()->SynthStudioContract.sequence(m("steps",new Object[]{m("notes",new Object[]{119})},"detune",1200),null,true,8000));
   rejects(()->SynthStudioContract.sequence(m("bpm",true),s,false,20000));
   rejects(()->SynthStudioContract.sequence(m("steps",new Object[]{m("notes",new Object[]{12.5})}),null,true,20000));
   rejects(()->SynthStudioContract.sequence(m("steps",new Object[]{m("rest",true,"notes",new Object[]{60})}),null,true,20000));
-  check(SynthStudioContract.sequence(m("bpm",100),null,false,20000).packet[0]==1);
+  rejects(()->SynthStudioContract.sequence(m("swing",.1),null,false,20000));
   double[] effects=SynthStudioContract.effects(m("chorus",m("enabled",true,"rate",2)),null);
   double[] merged=SynthStudioContract.effects(m("chorus",m("mix",.6)),effects);
   check(merged[1]==1&&merged[2]==2&&merged[4]==.6&&effects[4]==.25);
