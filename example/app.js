@@ -1,4 +1,10 @@
+var sequenceScore = require('lib/sequenceScore')
 var Synth = require('ti.synthengine')
+
+var sequenceOwner = require('lib/sequenceOwner')(Synth, {
+  rejected: function() { setStatus('Request rejected · sequence publication', COLORS.red) }
+})
+function publishSequence(options) { return sequenceOwner.submit(options) }
 
 var defaults = Synth.getDefaults()
 if (!defaults || defaults.apiVersion !== '1.0.0') {
@@ -294,7 +300,7 @@ function makeAction(options) {
     restoreColor()
     setStatus(options.status || ('Playing ' + options.title), options.statusColor || options.color)
     var accepted = options.onPress()
-    if (accepted === false) {
+    if (accepted === false || accepted === 0) {
       setStatus('Request rejected · inspect the native log', COLORS.red)
     }
   })
@@ -330,7 +336,7 @@ function playMatchedSine(note) {
 }
 
 function playMatchedArpeggio(pitchKey, pitches) {
-  return Synth.playPattern({
+  return publishSequence(sequenceScore({
     attack: 5,
     release: 30,
     volume: 0.7,
@@ -340,7 +346,7 @@ function playMatchedArpeggio(pitchKey, pitches) {
       step[pitchKey] = pitch
       return step
     })
-  })
+  }))
 }
 
 scrollView.add(makeHero())
@@ -565,7 +571,7 @@ retroSection.add(makeAction({
   pressedColor: COLORS.indigoPressed,
   status: 'Pattern-level shaping with per-step overrides',
   onPress: function () {
-    return Synth.playPattern({
+    return publishSequence(sequenceScore({
       stepDuration: 210,
       attack: 2,
       release: 80,
@@ -595,7 +601,7 @@ retroSection.add(makeAction({
           waveTable: STEPPED_WAVE
         }
       ]
-    })
+    }))
   }
 }))
 retroSection.add(Ti.UI.createView({ height: dp(16) }))
@@ -680,7 +686,7 @@ sequenceSection.add(makeAction({
   textColor: COLORS.canvas,
   status: 'Melody pattern · 140 BPM',
   onPress: function () {
-    return Synth.playPattern({
+    return publishSequence(sequenceScore({
       bpm: 140,
       swing: 0.1,
       steps: [
@@ -692,7 +698,7 @@ sequenceSection.add(makeAction({
         { note: 'Bb3', noteValue: '8n', volume: 0.7, waveType: WAVE.SQUARE },
         { note: 'G3', noteValue: '4n', volume: 0.8, waveType: WAVE.SQUARE }
       ]
-    })
+    }))
   }
 }))
 sequenceSection.add(makeAction({
@@ -701,7 +707,7 @@ sequenceSection.add(makeAction({
   pressedColor: COLORS.brownPressed,
   status: 'Noise percussion · 120 BPM',
   onPress: function () {
-    return Synth.playPattern({
+    return publishSequence(sequenceScore({
       bpm: 120,
       steps: [
         { frequency: 80, noteValue: '8n', volume: 0.9, waveType: WAVE.NOISE, attack: 2, release: 60 },
@@ -713,7 +719,7 @@ sequenceSection.add(makeAction({
         { frequency: 80, noteValue: '16n', volume: 0.7, waveType: WAVE.NOISE, attack: 2, release: 30 },
         { frequency: 80, noteValue: '16n', volume: 0.7, waveType: WAVE.NOISE, attack: 2, release: 30 }
       ]
-    })
+    }))
   }
 }))
 sequenceSection.add(Ti.UI.createView({ height: dp(16) }))
@@ -829,7 +835,7 @@ expressiveSection.add(makeAction({
   }
 }))
 
-var patternEndLabel = makeText('patternend: no pattern yet', {
+var patternEndLabel = makeText('sequenceend: no pattern yet', {
   top: dp(8),
   left: dp(16),
   right: dp(16),
@@ -837,24 +843,24 @@ var patternEndLabel = makeText('patternend: no pattern yet', {
   fontSize: 12
 })
 
-function onPatternEnd(event) {
-  patternEndLabel.text = event.completed
-    ? 'patternend: completed'
-    : 'patternend: replaced by a newer pattern'
-  setStatus(patternEndLabel.text, event.completed ? COLORS.green : COLORS.yellow)
+function onSequenceEnd(event) {
+  patternEndLabel.text = event.reason === 'completed'
+    ? 'sequenceend: completed'
+    : 'sequenceend: stopped'
+  setStatus(patternEndLabel.text, event.reason === 'completed' ? COLORS.green : COLORS.yellow)
 }
 
-Synth.addEventListener('patternend', onPatternEnd)
+Synth.addEventListener('sequenceend', onSequenceEnd)
 
 expressiveSection.add(makeAction({
   title: 'PATTERN END\nTap once to finish; tap again quickly to replace',
   color: COLORS.yellow,
   pressedColor: COLORS.yellowPressed,
   textColor: COLORS.canvas,
-  status: 'Pattern running · waiting for patternend',
+  status: 'Pattern running · waiting for sequenceend',
   onPress: function () {
-    patternEndLabel.text = 'patternend: pattern running'
-    return Synth.playPattern({
+    patternEndLabel.text = 'sequenceend: pattern running'
+    return publishSequence(sequenceScore({
       bpm: 132,
       noteValue: '8n',
       attack: 3,
@@ -871,7 +877,7 @@ expressiveSection.add(makeAction({
         { note: 'E5' },
         { note: 'C5', noteValue: '4n' }
       ]
-    })
+    }))
   }
 }))
 expressiveSection.add(patternEndLabel)
@@ -944,13 +950,13 @@ spatialSection.add(makeAction({
   title: 'SPATIAL PATTERN\nAbove left, below center, above right',
   color: COLORS.indigo, pressedColor: COLORS.indigoPressed,
   onPress: function () {
-    return Synth.playPattern({
+    return publishSequence(sequenceScore({
       stepDuration: 550, attack: 5, decay: 180, sustain: 0, release: 200,
       volume: 0.3, waveType: WAVE.NOISE,
       steps: [[-1, 1], [0, -1], [1, 1]].map(function (point) {
         return Object.assign({ frequency: 200 }, placement(point[0], point[1]))
       })
-    })
+    }))
   }
 }))
 spatialSection.add(Ti.UI.createView({ height: dp(16) }))
@@ -973,10 +979,10 @@ var sessionLabel = makeText('Session: playback', { left: dp(16), right: dp(16), 
     color: COLORS.blueDark, pressedColor: COLORS.blue,
     accessibilityHint: 'Restarts the engine with this session policy',
     onPress: function () {
-      Synth.shutdown()
+      sequenceOwner.reset(); Synth.shutdown()
       engineRunning = false
       selectedSession = session
-      patternEndLabel.text = 'patternend: cancelled by shutdown (no event)'
+      patternEndLabel.text = 'sequenceend: cancelled by shutdown (no event)'
       return startAppCycles()
     }
   }))
@@ -1079,7 +1085,7 @@ boostRow.add(makeGridAction({
   status: 'Active voices fading; pending pattern steps remain',
   accessibilityHint: 'Fades current voices without cancelling future pattern steps',
   onPress: function () {
-    Synth.stopAll()
+    sequenceOwner.stop(); Synth.stopAll()
   }
 }))
 controlSection.add(boostRow)
@@ -1109,7 +1115,7 @@ function setMasterVolume(volume) {
 function startAppCycles() {
   startTimer = null
   win.removeEventListener('postlayout', onFirstPostLayout)
-  engineRunning = Synth.startEngine({ maxVoices: 16, mixingProfile: 'conservative', audioSession: selectedSession })
+  engineRunning = Synth.start({ maxVoices: 16, mixingProfile: 'conservative', audioSession: selectedSession })
   // Keep session controls available for retry if a native stream cannot open.
   scrollView.touchEnabled = true
   interactiveControls.forEach(function (control) {
@@ -1146,7 +1152,7 @@ function cleanup() {
   stopStatsPolling()
   Synth.setStatsEnabled(false)
   diagnosticsEnabled = false
-  Synth.removeEventListener('patternend', onPatternEnd)
+  Synth.removeEventListener('sequenceend', onSequenceEnd)
   win.removeEventListener('postlayout', onFirstPostLayout)
   win.removeEventListener('open', hideAndroidActionBar)
   win.removeEventListener('focus', hideAndroidActionBar)
@@ -1157,7 +1163,7 @@ function cleanup() {
     startTimer = null
   }
   if (engineRunning) {
-    Synth.shutdown()
+    sequenceOwner.reset(); Synth.shutdown()
     engineRunning = false
   }
 }

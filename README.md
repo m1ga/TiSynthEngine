@@ -46,7 +46,7 @@ if (contract.apiVersion !== '1.0.0') {
   throw new Error('TiSynthEngine 1.0.0 is required')
 }
 
-if (synth.startEngine({
+if (synth.start({
   maxVoices: 16,
   mixingProfile: 'conservative',
   audioSession: 'ambient'
@@ -57,7 +57,7 @@ if (synth.startEngine({
 synth.playTone({ note: 'A4' })
 ```
 
-This game-oriented example uses `ambient`: on iOS it respects silent mode and mixes with other apps. The module default is `playback`, which ignores silent mode. Android validates this option without changing its output. Changing the session policy requires `shutdown()` followed by `startEngine()`.
+This game-oriented example uses `ambient`: on iOS it respects silent mode and mixes with other apps. The module default is `playback`, which ignores silent mode. Android validates this option without changing its output. Changing the session policy requires `shutdown()` followed by `start()`.
 
 Call `shutdown()` when the screen or app that owns the audio closes. For timed sounds, follow the [interactive example setup and test checklist](example/README.md). The [copyable advanced examples](documentation/examples.md#sustained-game-motor) cover held voices, sample-clock transport, effects and modulation.
 
@@ -76,7 +76,7 @@ function onPostLayout () {
   startTimer = setTimeout(function () {
     startTimer = null
     win.removeEventListener('postlayout', onPostLayout)
-    engineRunning = synth.startEngine({ maxVoices: 16 })
+    engineRunning = synth.start({ maxVoices: 16 })
   }, 250)
 }
 
@@ -97,7 +97,7 @@ Apps that start ads, remote configuration or entry animations may need a longer 
 
 Native sample-clock sequencing, stereo chorus/delay/reverb and optional creative saturation are available through capability-detected beta APIs. New processing starts disabled. See the [transport and processing contract](documentation/api.md#native-sequence-transport).
 
-The module exposes nineteen methods and one event, `patternend`.
+The module exposes nineteen methods and one event, `sequenceend`.
 
 | Method                  | Returns   | What it does                                                                                             |
 | ----------------------- | --------- | -------------------------------------------------------------------------------------------------------- |
@@ -105,37 +105,37 @@ The module exposes nineteen methods and one event, `patternend`.
 | `resetStats()`          | nothing   | Resets accumulated statistics without stopping sounds.                                                   |
 | `setStatsEnabled(bool)` | `Boolean` | Enables optional timing and signal measurements (off by default).                                        |
 | `getDefaults()`         | `Object`  | Reports the API version, defaults, limits, profiles and waveform constants.                              |
-| `startEngine(options)`  | `Boolean` | Opens the native stream and fixes its voice capacity and mixing profile.                                 |
+| `start(options)`  | `Boolean` | Opens the native stream and fixes its voice capacity and mixing profile.                                 |
 | `noteOn(options)`      | `Boolean` | Starts an identified sustained voice; see [sustained notes](documentation/api.md#noteonoptions). |
 | `noteOff(options)`     | `Boolean` | Begins the identified voice’s release from its current level. |
 | `updateVoice(options)` | `Boolean` | Ramps compatible active-voice parameters over 10 ms without retriggering. |
 | `playTone(options)`     | `Boolean` | Plays one pitch with optional sweep, pan movement and vibrato.                                           |
 | `playChord(options)`    | `Boolean` | Starts 1 to 32 pitches as one atomic event.                                                              |
-| `playPattern(options)`  | `Boolean` | Schedules 1 to 512 structured note or rest steps.                                                        |
-| `playSequence(options)` | `Boolean` | Starts sample-clock sixteenth-note transport with step chords. |
-| `updateSequence(changes)` | `Boolean` | Publishes an atomic transport edit without restarting. |
-| `stopSequence()` | `Boolean` | Stops transport and releases only its voices. |
-| `getSequenceState()` | `Object` | Reports applied step, musical position, tempo and revision. |
+| `playSequence(options)` | positive ID or 0 | Publishes an independent sample-clock sequence. |
+| `setTempo({ bpm })` | `Boolean` | Changes global musical tempo, preserving position. |
+| `updateSequence({ sequenceId, ...changes })` | `Boolean` | Publishes an atomic transport edit without restarting. |
+| `stopSequence({ sequenceId })` | `Boolean` | Stops transport and releases only its voices. |
+| `getSequenceState({ sequenceId })` | `Object` | Reports applied step, musical position, tempo and revision. |
 | `setMasterProcessing(options)` | `Boolean` | Configures fixed input gain, stereo effects and optional saturation. |
 | `setVolume(options)`    | `Boolean` | Changes the master level with a short ramp.                                                              |
 | `stopAll()`             | nothing   | Releases all sounding voices through a short fade.                                                       |
 | `shutdown()`            | nothing   | Stops the stream, cancels pending pattern steps and frees resources.                                     |
 
-The thirteen Boolean methods return `true` when accepted. A `false` result means the payload was rejected, the engine is not running, the stream could not open, or the command queue was full.
+Boolean methods return `true` when accepted. A `false` result means the payload was rejected, the engine is not running, the stream could not open, or the command queue was full.
 
 ## Sustained voices, musical transport and effects
 
 | Feature | What you can build | Start here |
 | --- | --- | --- |
 | `noteOn`, `noteOff`, `updateVoice` | Playable keys, a held game motor, drones and final fanfare chords; compatible live controls ramp over 10 ms. | [Held voice ownership](documentation/guide.md#hold-and-edit-a-voice) |
-| `playSequence`, `updateSequence`, `stopSequence`, `getSequenceState` | Native sixteenth-note timing, step chords, rests, gates, swing and arpeggios, up to 512 steps. | [Musical transport](documentation/guide.md#choose-the-musical-transport) |
+| `playSequence`, `updateSequence`, `stopSequence`, `getSequenceState` | Beat or millisecond timing, step chords, rests, gates, swing and arpeggios, up to 512 steps. | [Musical transport](documentation/guide.md#choose-the-musical-transport) |
 | `setMasterProcessing` | Stereo chorus, free/synced ping-pong delay and damped stereo reverb; optional creative saturation. | [Master effects](documentation/guide.md#add-master-effects) |
 | `modulations` on held/sequence voices | Up to two sine/triangle LFOs for filter cutoff, square PWM or sine FM, with free or tempo-synced rates. | [LFO example](documentation/examples.md#two-voice-lfos) |
 | Accumulated signal diagnostics | See brief pre-limiter peaks and limiter attenuation that happened between UI polls. | [Measure the mix](documentation/examples.md#measure-peaks-and-limiter-reduction) |
 
 Beta packages retain `apiVersion: '1.0.0'`: detect the methods you need and rebuild the app with matching Android/iOS packages. The [guide](documentation/guide.md#detect-optional-beta-capabilities) shows feature detection. Timed playback remains available through its existing methods.
 
-The initial module state is `inputGain: 1`, all four master processors disabled and no additional voice LFOs. Turning an effect on is explicit; these features are available to every Titanium consumer, including games. Master effects process the entire mix, with no per-voice send or separate music/effects bus. Turning them off drains their tails; `stopAll()` performs panic and clears effect histories. Saturation changes timbre and remains separate from final limiter protection.
+The initial module state is `inputGain: 1`, all four master processors disabled and no additional voice LFOs. Turning an effect on is explicit; these features are available to every Titanium consumer, including games. Select processed categories with `applyTo`; an explicit per-voice `effectSend` overrides category selection. Music, effects, UI and ambience share one effects chain and one final limiter. Turning them off drains their tails; `stopAll()` performs panic and clears effect histories. Saturation changes timbre and remains separate from final limiter protection.
 
 ```javascript
 if (typeof synth.playSequence !== 'function' ||
@@ -145,7 +145,8 @@ if (typeof synth.playSequence !== 'function' ||
 if (!synth.setMasterProcessing({ reverb: { enabled: true, decay: 1.1, mix: 0.12 } })) {
   throw new Error('Reverb configuration rejected')
 }
-if (!synth.playSequence({ bpm: 110, loop: false,
+synth.setTempo({ bpm: 110 })
+if (!synth.playSequence({ loop: false,
   voice: { waveType: contract.waveTypes.TRIANGLE, volume: 0.3, release: 180 },
   steps: [{ notes: [60] }, { notes: [64] }, { notes: [67] }, { notes: [60, 64, 67] }] })) {
   synth.shutdown()
@@ -153,7 +154,7 @@ if (!synth.playSequence({ bpm: 110, loop: false,
 }
 ```
 
-The engine owns each note start and release; JavaScript need not trigger the steps. A sequence step uses MIDI numbers, while `playTone`, `playChord` and `noteOn` accept note-name strings. `true` means accepted publication, not that the audio callback already applied it. See the [API](documentation/api.md#native-sequence-transport) for edits, cancellation and state polling, and [technical validation limits](documentation/audio-engine.md#native-transport-and-processing) before sizing a realtime workload.
+The engine owns each note start and release; JavaScript need not trigger the steps. A sequence step uses MIDI numbers, while `playTone`, `playChord` and `noteOn` accept note-name strings. A positive sequence ID means accepted publication, not that the audio callback already applied it. See the [API](documentation/api.md#native-sequence-transport) for edits, cancellation and state polling, and [technical validation limits](documentation/audio-engine.md#native-transport-and-processing) before sizing a realtime workload.
 
 ## Strict options
 
@@ -257,7 +258,7 @@ synth.playTone({
 })
 ```
 
-These controls are available on `playTone`, at the root and step level of `playPattern`, and as fixed values on `playChord`. Chords do not accept sweep fields.
+These controls are available on `playTone`, in sequence `voice` and step `overrides`, and as fixed values on `playChord`. Chords do not accept sweep fields.
 
 ## Envelopes
 
@@ -363,47 +364,30 @@ The command is atomic. The render thread sees the complete chord or none of it, 
 
 Separate `playTone` calls are independent events. They are appropriate for unrelated touches or collisions, but several of them can produce a hotter sum than the same notes in one chord.
 
-`maxVoices` sets voice capacity without changing volume. Timed-only pools replace the voice with the least time remaining. Sustained/transport replacement prefers releasing voices, then the oldest attack; every replacement has a short fade tail. There are no reserved voices or priority lanes.
+`maxVoices` sets voice capacity without changing volume. Timed-only pools replace the voice with the least time remaining. Sustained/transport replacement prefers releasing voices, then the oldest attack; every replacement has a short fade tail. Optional priority 0-3 selects the lowest eligible victims first. A chord is admitted or dropped as a whole; no voices are reserved.
 
-## Patterns
+## Sequences
 
-Each pattern step is an object with exactly one pitch or a rest:
+Use one native sample clock for successive sounds. Beats follow the global tempo; millisecond sequences retain fixed times. Steps support chords, duplicates, rests, variable intervals, independent note lengths and sound overrides.
 
 ```javascript
-synth.playPattern({
-  bpm: 112,
-  swing: 0.12,
-  noteValue: '8n',
-  waveType: WAVE.SQUARE,
-  volume: 0.55,
-  steps: [
-    { note: 'C4' },
-    { note: 'E4', pan: -0.4, panEnd: 0.4 },
-    { rest: true },
-    { note: 'G4', noteValue: '4n', lfoFreq: 6, lfoDepth: 10 }
-  ]
+synth.setTempo({ bpm: 112 })
+var sequenceId = synth.playSequence({
+  stepDuration: 0.5, swing: 0.12, bus: 'music',
+  voice: { waveType: WAVE.SQUARE, volume: 0.55 },
+  steps: [{ notes: [60] }, { notes: [64], overrides: { pan: -0.4, panEnd: 0.4 } },
+    { rest: true }, { notes: [67], duration: 1, length: 0.8 }]
 })
+if (sequenceId === 0) throw new Error('Sequence rejected')
+// Stop this owner without affecting unrelated voices:
+synth.stopSequence({ sequenceId: sequenceId })
 ```
 
-Bare strings and numbers are rejected with `invalid_step_type`. Pattern-level options are inherited by steps, and a step can override its timing, envelope, level, waveform, pan, sweep or vibrato.
-
-Step length uses step `duration`, step `noteValue`, pattern `noteValue`, pattern `stepDuration`, then the 100 ms default, in that order.
-
-Only one pattern can be pending. Starting a new pattern cancels the future steps of the old one. `stopAll()` releases the notes already sounding but does not cancel future steps. Start a one-step rest or call `shutdown()` to cancel them.
-
-An accepted pattern reports `patternend` unless `shutdown()` cancels it first. `completed` is `true` at the natural end and `false` when a newer pattern or native sequence replaces it. Calling `stopAll()` leaves future steps scheduled and emits no event; `shutdown()` cancels them without an event. Sound may remain after the scheduler finishes. Remove the listener when the owner closes:
-
-```javascript
-function onPatternEnd (event) {
-  if (event.completed) playNextPattern()
-}
-
-synth.addEventListener('patternend', onPatternEnd)
-```
+Start with `maxSequences: 4` for up to four independent sequences. Sequence identifiers never repeat during the module lifetime. Completion/stop emits `sequenceend` with `{ sequenceId, reason: 'completed' | 'stopped' }` outside the callback. See the [full contract](documentation/api.md#native-sequence-transport).
 
 ## Binaural headphone positioning
 
-Send `spatialX` (left/right) and `spatialY` (below/above), each from -1 to 1, on a tone, chord or pattern. Either coordinate enables binaural; omit both for ordinary stereo. Never combine them with `pan`, `panEnd`, `pans` or `panSpread`, including inherited pattern fields. Positions stay fixed for each event.
+Send `spatialX` (left/right) and `spatialY` (below/above), each from -1 to 1, on a tone, chord or sequence voice. Either coordinate enables binaural; omit both for ordinary stereo. Never combine them with `pan`, `panEnd`, `pans` or `panSpread`, including inherited voice fields. Timed events keep their position; spatial held voices can be updated smoothly.
 
 Use stereo headphones and broadband noise to compare height. This is a front plane with two-channel output, without rear sources or head tracking. The [integration guide](documentation/guide.md#integrate-binaural-in-a-2d-app) covers app switches and coordinate conversion; the [interactive example](example/README.md#headphone-positioning) offers nine positions and a stereo comparison.
 
@@ -415,7 +399,7 @@ See the [integration and cleanup recipe](documentation/guide.md#read-engine-stat
 
 ## Mixing profiles
 
-The profile is chosen in `startEngine()` and stays fixed until `shutdown()`.
+The profile is chosen in `start()` and stays fixed until `shutdown()`.
 
 | Profile        | Sine voice gain | Limiter ceiling | Good fit                                                        |
 | -------------- | --------------: | --------------: | --------------------------------------------------------------- |

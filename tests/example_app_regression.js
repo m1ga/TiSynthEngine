@@ -27,14 +27,15 @@ function playground() {
   const synth = widget()
   synth.getDefaults = () => ({ apiVersion: '1.0.0', limits: { spatialX: {}, spatialY: {} },
     waveTypes: { SINE: 0, SQUARE: 1, SAWTOOTH: 2, TRIANGLE: 3, NOISE: 4, WAVETABLE: 5 } })
-  for (const method of ['startEngine', 'playTone', 'playChord', 'playPattern', 'setVolume', 'setStatsEnabled']) {
+  for (const method of ['start', 'playTone', 'playChord', 'playSequence', 'setVolume', 'setStatsEnabled', 'stopSequence']) {
     synth[method] = options => {
       const call = { method, options: JSON.parse(JSON.stringify(options)) }
       calls.push(call)
       if (accepted) recorded.push(call)
-      return accepted
+      return method === 'playSequence' ? (accepted ? 1 : 0) : accepted
     }
   }
+  synth.getSequenceState = () => ({playing:true})
   synth.shutdown = () => calls.push({ method: 'shutdown' })
   synth.stopAll = () => calls.push({ method: 'stopAll' })
   synth.resetStats = () => calls.push({ method: 'resetStats' })
@@ -45,7 +46,7 @@ function playground() {
   } }
   const app = widget()
   vm.runInNewContext(source, {
-    require: () => synth,
+    require: id => id === 'lib/sequenceScore' ? require('../example/lib/sequenceScore') : id === 'lib/sequenceOwner' ? require('../example/lib/sequenceOwner') : synth,
     Ti: { UI: new Proxy({}, { get: (_, key) => key.startsWith('create') ? widget : key }),
       Platform: { osname: 'iphone' }, App: app, API: { info() {}, warn() {} } },
     setTimeout(fn) { timers.set(++serial, fn); return serial }, clearTimeout(id) { timers.delete(id) },
@@ -68,7 +69,7 @@ test('every sound and volume button surfaces native rejection', () => {
     const b = p.actions().find(button => button.children[0].text === action.children[0].text)
     const before = p.calls.length
     b.fire('click')
-    if (p.calls.slice(before).some(c => ['playTone', 'playChord', 'playPattern', 'setVolume'].includes(c.method))) {
+    if (p.calls.slice(before).some(c => ['playTone', 'playChord', 'playSequence', 'setVolume'].includes(c.method))) {
       assert.match(p.text(), /Request rejected/, b.children[0].text)
     }
   }
@@ -96,11 +97,11 @@ test('changing iOS session restarts the engine and restores master gain', () => 
   const before = p.calls.length
   p.click('AMBIENT SESSION')
   const calls = p.calls.slice(before)
-  assert(calls.findIndex(c => c.method === 'shutdown') < calls.findIndex(c => c.method === 'startEngine'))
-  assert.equal(calls.find(c => c.method === 'startEngine').options.audioSession, 'ambient')
+  assert(calls.findIndex(c => c.method === 'shutdown') < calls.findIndex(c => c.method === 'start'))
+  assert.equal(calls.find(c => c.method === 'start').options.audioSession, 'ambient')
   assert.equal(calls.find(c => c.method === 'setVolume').options.volume, 0.5)
   p.click('PLAYBACK SESSION')
-  assert.equal(p.calls.filter(c => c.method === 'startEngine').at(-1).options.audioSession, 'playback')
+  assert.equal(p.calls.filter(c => c.method === 'start').at(-1).options.audioSession, 'playback')
 })
 
 test('diagnostic polling is opt-in, preserves null and cleans up the owner', () => {
@@ -113,18 +114,18 @@ test('diagnostic polling is opt-in, preserves null and cleans up the owner', () 
   assert.equal(p.intervals.size, 1)
   p.click('RESET STATS')
   assert.equal(p.calls.filter(c => c.method === 'resetStats').length, 1)
-  p.synth.fire('patternend', { completed: false }); assert.match(p.text(), /replaced by a newer pattern/)
-  p.synth.fire('patternend', { completed: true }); assert.match(p.text(), /patternend: completed/)
+  p.synth.fire('sequenceend', {sequenceId:1, reason:'stopped'}); assert.match(p.text(), /stopped/)
+  p.synth.fire('sequenceend', {sequenceId:1, reason:'completed'}); assert.match(p.text(), /sequenceend: completed/)
   p.win.fire('close')
   assert.equal(p.intervals.size, 0)
-  assert.equal(p.synth.events.get('patternend').size, 0)
+  assert.equal(p.synth.events.get('sequenceend').size, 0)
   assert.equal(p.calls.filter(c => c.method === 'setStatsEnabled').at(-1).options, false)
   assert.equal(p.calls.at(-1).method, 'shutdown')
 })
 
 test('closing before layout settles cancels delayed startup', () => {
   const p = playground(); p.win.fire('postlayout'); p.win.fire('close'); p.settle()
-  assert(!p.calls.some(c => c.method === 'startEngine'))
+  assert(!p.calls.some(c => c.method === 'start'))
 })
 
 test('all example playback requests can be exported for native contract validation', () => {
@@ -132,4 +133,36 @@ test('all example playback requests can be exported for native contract validati
   for (const b of p.actions()) b.fire('click')
   p.win.fire('close')
   if (process.env.SYNTH_EXAMPLE_REQUESTS) fs.writeFileSync(process.env.SYNTH_EXAMPLE_REQUESTS, JSON.stringify(recorded))
+})
+
+test('score compilation preserves millisecond onsets, release onset and mutually exclusive pitches', () => {
+  const compile = require('../example/lib/sequenceScore')
+  const seq = compile({ stepDuration: 210, attack: 2, release: 80, waveType: 4, steps: [
+    { frequency: 120, duration: 180, release: 150 }, { rest: true, duration: 100 },
+    { note: 'A3', duration: 300, release: 120, waveType: 1 }
+  ] })
+  assert.equal(seq.timeUnit, 'ms'); assert.equal(seq.loop, false)
+  assert.deepEqual(seq.steps.map(step => step.duration), [180, 100, 300])
+  assert.deepEqual(seq.steps.filter(step => !step.rest).map(step => step.length), [30, 180])
+  assert.equal(seq.steps[2].frequencies[0], 220); assert.equal(seq.steps[2].overrides.waveType, 1)
+  assert.equal(seq.voice.steps, undefined); assert.equal(seq.voice.stepDuration, undefined)
+  for (const step of seq.steps) assert.equal(['notes', 'frequencies', 'rest'].filter(key => key in step).length, 1)
+})
+
+test('repeated scores coalesce until their stopped native owner retires', () => {
+  const p = playground(); p.start()
+  let active = 0, serial = 0, stopRequests = 0
+  const publications = []
+  p.synth.playSequence = options => {
+    if (active) return 0
+    publications.push(options); active = ++serial; return active
+  }
+  p.synth.stopSequence = () => { stopRequests++; return true }
+  p.click('SHAPING PATTERN'); p.click('SPATIAL PATTERN'); p.click('PATTERN END')
+  assert.equal(publications.length, 1); assert.equal(stopRequests, 1)
+  active = 0; p.synth.fire('sequenceend', {sequenceId:1, reason:'stopped'})
+  assert.equal(publications.length, 2); assert.equal(publications[1].voice.waveType, 1)
+  p.synth.fire('sequenceend', {sequenceId:1, reason:'completed'})
+  assert.equal(publications.length, 2)
+  p.win.fire('close')
 })

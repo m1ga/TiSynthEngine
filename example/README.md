@@ -1,6 +1,6 @@
 # Interactive example
 
-The Classic Titanium app in [app.js](app.js) demonstrates the eleven timed-playback/statistics methods and the `patternend` event on Android and iOS. It uses the current 1.0.0 module packages, including binaural and statistics support. Held voices, native transport, master processing and voice LFOs have copyable examples in the [advanced documentation](../documentation/examples.md#sustained-game-motor); this reference app does not expose those newer controls. The default engine configuration is 16 voices, `conservative` mixing and the `playback` session; master volume starts at 100% and optional diagnostics start off.
+The Classic Titanium app in [app.js](app.js) demonstrates the timed sounds, native sequences and statistics with the `sequenceend` event on Android and iOS. It uses the current 1.0.0 module packages, including binaural and statistics support. Held voices, master processing and voice LFOs have copyable examples in the [advanced documentation](../documentation/examples.md#sustained-game-motor); this reference app does not expose those newer controls. The default engine configuration is 16 voices, `conservative` mixing and the `playback` session; master volume starts at 100% and optional diagnostics start off.
 
 ## Run it
 
@@ -41,18 +41,20 @@ SPATIAL CHORD places the whole chord above/right. SPATIAL PATTERN places three b
 
 ## Audio session
 
-On iOS, compare PLAYBACK SESSION and AMBIENT SESSION. Changing the selection shuts down the engine, silently cancels any pending pattern, starts the new policy and restores the selected master volume. It does not resume the previous sound. The policy is fixed while the stream runs; a second `startEngine()` alone cannot change it.
+On iOS, compare PLAYBACK SESSION and AMBIENT SESSION. Changing the selection shuts down the engine, silently cancels any pending pattern, starts the new policy and restores the selected master volume. It does not resume the previous sound. The policy is fixed while the stream runs; a second `start()` alone cannot change it.
 
 On an iOS device, play music from another app and try a short sound in ambient mode; compare with playback. Also compare the device's silent mode where available. Ambient should respect silent mode and mix with other apps; playback ignores silent mode and normally interrupts their audio. Android validates both strings but does not change its output. Simulator behavior does not establish the physical silent-mode, interruption or route behavior.
 
-## Pattern completion and replacement
+## Sequence completion and cancellation
 
-1. Tap PATTERN END once and wait for `patternend: completed`.
-2. Tap it twice quickly while the first pattern is pending. The first reports replacement; the new pattern subsequently reports completion. Other pattern buttons share the same scheduler and also replace a pending pattern.
-3. Start a pattern, then select a session. Shutdown cancels it without generating `patternend`; the label marks that cancellation explicitly. An event already queued for JavaScript may still be delivered.
-4. Compare STOP ALL: it fades current voices but leaves future pattern steps scheduled. Those steps can sound afterward, and the pattern still completes. Use a session restart or close the example to cancel scheduling and release the stream.
+1. Tap PATTERN END and wait for `sequenceend: completed`.
+2. Tap it twice quickly. The example requests stop for its accepted sequence, coalesces repeated taps to the latest complete score, and publishes it only after the matching retirement event frees capacity. Native `sequenceend` events report `{ sequenceId, reason: 'completed' | 'stopped' }`.
+3. Selecting a session shuts down the engine and restarts it with the selected policy. Events already queued for JavaScript can still arrive.
+4. STOP ALL releases active voices and cancels future attacks. Closing the example shuts down its engine.
 
-The event reports when the scheduler finishes. Swing, callback timing and binaural FIR draining can leave sound playing afterward. Events have no pattern identifier, so the global label reports whichever pattern owns the shared scheduler. See the [event contract](../documentation/api.md#patternend-event).
+All successive attacks run on the native sample clock. The example compiles its note-name scores to millisecond sequences with explicit `duration` and `length`, preserving the original interval and release onset. Each sequence has one of `frequencies`, MIDI `notes`, or `rest: true` per step, with sound shaping in `voice`/`overrides`. Copy the entire `example/` folder, including `lib/sequenceScore.js` and `lib/sequenceOwner.js`, into a Classic app's Resources folder.
+
+Completion marks the final scheduled step; releases and shared effect tails can remain audible. See the [event contract](../documentation/api.md#sequenceend-event).
 
 ## Statistics
 

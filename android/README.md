@@ -2,7 +2,7 @@
 
 This folder contains the Android implementation of `ti.synthengine` 1.0.0. The public API is documented in the root [README](../README.md) and the [API reference](../documentation/api.md).
 
-The current beta exposes the same nineteen methods on both platforms. Effects and extra LFOs are opt-in; input gain starts at unity. See [new-feature integration](../documentation/guide.md#detect-optional-beta-capabilities) and [copyable examples](../documentation/examples.md#sustained-game-motor). The version remains 1.0.0; rebuild consumer apps with current packages rather than relying on the version string.
+The current beta exposes the same nineteen methods on both platforms. Effects and extra LFOs are opt-in; input gain starts at unity. See [new-feature integration](../documentation/guide.md#detect-optional-beta-capabilities) and [copyable examples](../documentation/examples.md#sustained-game-motor). Use `start({ maxSequences: 4 })` for up to four independent native sequences. Retain each positive sequence ID for edits, stopping and state queries. `setTempo` controls beat sequences and synchronized effects; millisecond sequences keep fixed times. Categories (`music`, `effects`, `ui`, `ambience`), explicit sends and optional priority share one renderer and one effects chain. The version remains 1.0.0; rebuild consumer apps with current packages rather than relying on the version string.
 
 ## Runtime
 

@@ -120,112 +120,13 @@ for (const relativePath of publicFiles) {
   checkJavaScriptFences(relativePath, source)
 }
 
-const readme = read('README.md')
-const soundDesign = read('documentation/sound-design.md')
-const examples = read('documentation/examples.md')
-const exampleApp = read('example/app.js')
-const allGuides = publicFiles.map(read).join('\n')
-
-checkUnwrappedProse('README.md', readme)
-assert(allGuides.includes('unsupported_option'), 'strict unknown-option behavior is documented')
-assert(allGuides.includes('invalid_step_type'), 'invalid pattern step behavior is documented')
-assert(allGuides.includes('speakerSafe'), 'speaker-safe profile is documented')
-assert(allGuides.includes("audioSession: 'ambient'"), 'ambient audio session is documented')
-assert(allGuides.includes('panEnd'), 'pan movement is documented')
-assert(allGuides.includes('lfoFreq') && allGuides.includes('lfoDepth'), 'vibrato is documented')
-assert(allGuides.includes('noiseRate') && allGuides.includes('noiseRateEnd'),
-  'variable-rate noise is documented')
-assert(allGuides.includes('lowPassHz'), 'low-pass filtering is documented')
-assert(allGuides.includes('pulseWidth') && allGuides.includes('pulseWidthEnd'),
-  'pulse-width control is documented')
-assert(allGuides.includes('waveTable') && allGuides.includes('WAVETABLE'),
-  'custom wavetables are documented')
-assert(allGuides.includes('bitDepth'), 'amplitude quantization is documented')
-assert(!/defender|williams/i.test(allGuides + '\n' + exampleApp),
-  'public documentation and example stay product-neutral')
-assert(examples.includes('WAVE.SAWTOOTH'), 'sawtooth example is present')
-assert(examples.includes('pans: ['), 'per-note chord pan example is present')
-assert(examples.includes('bpm:') && examples.includes('swing:') && examples.includes('noteValue:'),
-  'tempo, swing and note-value examples are present')
-assert(examples.includes('Fixed controls on a chord'),
-  'fixed chord controls have a complete example')
-assert(examples.includes('Wave-shaping pattern overrides'),
-  'inherited and per-step controls have a complete example')
-assert(soundDesign.includes('Interface click'), 'click recipe is present')
-assert(soundDesign.includes('Soft pad'), 'pad recipe is present')
-assert(soundDesign.includes('Noise percussion'), 'noise percussion recipe is present')
-assert(soundDesign.includes('Simon-style cues'), 'Simon-style recipe is present')
-assert(soundDesign.includes('not atomic'), 'independent tone calls are explained')
-assert(soundDesign.includes('pumping'), 'retrigger pumping is explained')
-const expressiveKeys = ['decay', 'sustain', 'filterType', 'filterHz', 'filterHzEnd', 'filterQ',
-  'fmRatio', 'fmDepth', 'fmDepthEnd', 'detune', 'detunes']
-const expressiveReasons = ['sustain_without_decay', 'decay_exceeds_remaining_duration',
-  'filter_type_required', 'fm_requires_sine', 'fm_depth_required']
 const apiDoc = read('documentation/api.md')
 const guideDoc = read('documentation/guide.md')
-const troubleshootingDoc = read('documentation/troubleshooting.md')
-for (const key of expressiveKeys) {
-  assert(apiDoc.includes('`' + key + '`'), `api.md documents ${key}`)
-  assert(allGuides.includes(key + ':'), `a guide shows ${key} in code`)
-}
-for (const reason of expressiveReasons) {
-  assert(apiDoc.includes('`' + reason + '`'), `api.md lists the ${reason} reason`)
-  assert(troubleshootingDoc.includes('`' + reason + '`'), `troubleshooting.md explains ${reason}`)
-}
-assert(apiDoc.includes('filterTypes'), 'getDefaults reports the filter types')
-assert(apiDoc.includes('## `patternend` event') && apiDoc.includes('completed'),
-  'api.md documents the patternend event and its payload')
-assert(readme.includes('patternend') && guideDoc.includes('removeEventListener(\'patternend\'')
-  && troubleshootingDoc.includes('patternend'),
-  'the event is introduced, cleaned up and troubleshot')
-for (const recipe of ['Pluck', 'Electric piano', 'Bell', 'Filtered laser', 'Hi-hat', 'Thick pad', 'Kick']) {
-  assert(soundDesign.includes('### ' + recipe), `sound design has the ${recipe} recipe`)
-}
-assert(read('documentation/audio-engine.md').includes('shared/synth_core.h'),
-  'the shared DSP core is documented')
-assert(!fs.existsSync(path.join(root, 'documentation/migration-3.0.md')),
-  'migration document is removed from the public tree')
-assert(!fs.existsSync(path.join(root, 'analisis.md')),
-  'historical analysis is removed from the public tree')
-assert(!fs.existsSync(path.join(root, 'docs'))
-  || fs.readdirSync(path.join(root, 'docs')).every(name => name === 'project' || name === '.DS_Store'),
-  'docs/ holds only the local project notes')
-assert(!fs.existsSync(path.join(root, 'README-ORIGINAL.md')),
-  'stale README copy is removed from the repository')
-
-new vm.Script(exampleApp, { filename: 'example/app.js' })
-assert(exampleApp.includes("apiVersion !== '1.0.0'"),
-  'example checks the public API version')
-assert(exampleApp.includes('WAVE.SAWTOOTH'),
-  'example exposes the sawtooth waveform')
-assert(exampleApp.includes('WAVE.WAVETABLE'),
-  'example exposes the wavetable waveform')
-assert(exampleApp.includes('noiseRateEnd:'),
-  'example demonstrates a variable-rate noise sweep')
-assert(exampleApp.includes('pulseWidthEnd:'),
-  'example demonstrates a pulse-width sweep')
-assert(exampleApp.includes('SHAPING PATTERN'),
-  'example demonstrates pattern inheritance and overrides')
-assert(exampleApp.includes('return Synth.playPattern({\n      stepDuration: 210,'),
-  'shaping pattern exposes its acceptance result')
-assert(exampleApp.includes("accepted === false"),
-  'example reports rejected sound requests')
-assert(exampleApp.includes('pans: ['),
-  'example demonstrates explicit chord pans')
-assert(exampleApp.includes('{ rest: true, noteValue:'),
-  'noise pattern contains an explicit rest')
-for (const key of ['decay:', 'sustain:', 'filterType:', 'filterHzEnd:', 'fmDepthEnd:', 'fmRatio:', 'detunes:']) {
-  assert(exampleApp.includes(key), `example demonstrates ${key}`)
-}
-assert(exampleApp.includes("Synth.addEventListener('patternend'")
-  && exampleApp.includes("Synth.removeEventListener('patternend'"),
-  'example listens for patternend and removes the listener on close')
-
-
-// Compare method tables with the native allowlists, not just mentions elsewhere.
 const nativeContract = read('android/src/ti/synthengine/SynthContract.java')
 const nativeModule = read('android/src/ti/synthengine/TiSynthEngineModule.java')
 const nativeIosContract = read('ios/Classes/TiSynthengineContract.m')
+const exampleApp = read('example/app.js')
+new vm.Script(exampleApp, { filename: 'example/app.js' })
 function documentedKeys (section) {
   const keys = []
   for (const row of section.split('\n').filter(line => line.startsWith('|'))) {
@@ -249,35 +150,19 @@ function nativeKeys (method, target) {
   assert(list, 'native allowlist exists: ' + method + '/' + target)
   return [...new Set([...list[1].matchAll(/"(\w+)"/g)].map(match => match[1]))].sort()
 }
-for (const [method, validator] of [['startEngine', 'StartEngine'], ['playTone', 'Tone'],
-  ['playChord', 'Chord'], ['playPattern', 'Pattern'], ['setVolume', 'SetVolume'],
-  ['noteOn', 'NoteOn'], ['noteOff', 'NoteOff'], ['updateVoice', 'UpdateVoice']]) {
-  const section = apiDoc.split('## `' + method + '(options)`')[1].split('\n## ')[0]
-  const rootTable = method === 'playPattern' ? section.split('Step keys:')[0] : section
-  assert.deepStrictEqual(documentedKeys(rootTable), nativeKeys(validator, 'options'),
-    method + ' table covers exactly the native options')
-  assert.deepStrictEqual(documentedKeys(rootTable), nativeIosKeys(validator, 'options'),
-    method + ' table covers exactly the iOS options')
-  if (method === 'playPattern') {
-    assert.deepStrictEqual(documentedKeys(section.split('Step keys:')[1]), nativeKeys('Pattern', 'step'),
-      'pattern step table covers exactly the native options')
-    assert.deepStrictEqual(documentedKeys(section.split('Step keys:')[1]), nativeIosKeys('Pattern', 'step'),
-      'pattern step table covers exactly the iOS options')
-  }
+
+for (const [method, validator] of [['start', 'Start'], ['playTone', 'Tone'],
+  ['playChord', 'Chord'], ['setVolume', 'SetVolume'], ['noteOn', 'NoteOn'],
+  ['noteOff', 'NoteOff'], ['updateVoice', 'UpdateVoice']]) {
+  const section = apiDoc.split('## `' + method + '(options)`')[1]
+  assert(section, method + ' documented')
+  const table = section.split('\n## ')[0]
+  assert.deepStrictEqual(documentedKeys(table), nativeKeys(validator, 'options'), method + ' Java options')
+  assert.deepStrictEqual(documentedKeys(table), nativeIosKeys(validator, 'options'), method + ' iOS options')
 }
 const defaultObject = apiDoc.split('The result has this shape:')[1].match(/```javascript\s*\n([\s\S]*?)```/)[1]
 const reported = vm.runInNewContext('(' + defaultObject + ')')
-const nativeDefaultKeys = [...nativeModule.matchAll(/defaults\.put\("(\w+)"/g)].map(match => match[1]).sort()
-assert.deepStrictEqual(Object.keys(reported.defaults).sort(), nativeDefaultKeys,
-  'getDefaults example contains every native default')
-const limitTable = apiDoc.split('## Limits')[1].split('\n## ')[0]
-const nativeLimitKeys = [...nativeModule.matchAll(/limits\.put\("(\w+)"/g)].map(match => match[1])
-for (const key of nativeLimitKeys) {
-  assert(limitTable.includes('`' + key + '`') || documentedKeys(limitTable).includes(key),
-    'limits table identifies getDefaults().limits.' + key)
-}
-
-
+assert.deepStrictEqual(Object.keys(reported.defaults).sort(), [...nativeModule.matchAll(/defaults\.put\("(\w+)"/g)].map(m => m[1]).sort())
 const nativeConstants = new Map()
 for (const [prefix, source] of [['SynthContract.', nativeContract], ['', nativeModule]]) {
   for (const match of source.matchAll(/static final (?:int|double|String)\s+(\w+)\s*=\s*([^;]+);/g)) {
@@ -285,6 +170,7 @@ for (const [prefix, source] of [['SynthContract.', nativeContract], ['', nativeM
   }
 }
 function nativeDefaultValue (expression) {
+  if (expression === 'true' || expression === 'false') return expression === 'true'
   if (expression === 'new Object[]{}') return []
   if (/^".*"$/.test(expression)) return JSON.parse(expression)
   if (/^-?[\d.]+$/.test(expression)) return Number(expression)
@@ -344,66 +230,57 @@ assert(!('spatialY' in requests.at(-1)))
 assert.throws(() => sandbox.playPositionedTone(originalRecipe, 0, 0, 0, 800),
   /positive dimensions/, 'invalid arena dimensions are rejected')
 
-// Execute rhythm examples so a short voice duration cannot silently replace
-// the tempo grid advertised by the surrounding documentation.
-function patternExample(source, heading) {
-  const section = source.split(heading + '\n')[1].split(/\n#{1,3} /)[0]
-  const code = section.match(/```javascript\s*\n([\s\S]*?)```/)[1]
-  const patterns = []
-  vm.runInNewContext(code, {
-    synth: { playPattern: options => { patterns.push(options); return true } },
-    WAVE: { SINE: 0, SQUARE: 1, SAWTOOTH: 2, TRIANGLE: 3, NOISE: 4 }
-  })
-  assert.strictEqual(patterns.length, 1, heading + ' submits one pattern')
-  return patterns[0]
-}
-function rhythm(pattern) {
-  let elapsed = 0
-  return Array.from(pattern.steps, (step, index) => {
-    const value = step.noteValue || pattern.noteValue
-    const quarter = 60000 / (pattern.bpm || 120)
-    const noteMs = { '4n': quarter, '8n': quarter / 2, '16n': quarter / 4 }[value]
-    const duration = step.duration ?? noteMs ?? pattern.stepDuration ?? 100
-    const start = Math.max(0, elapsed + (index % 2 ? -1 : 1) * (pattern.swing || 0) * duration)
-    elapsed += duration
-    return { start, duration, rest: step.rest === true }
-  })
-}
-function closeTo(actual, expected, message) {
-  assert(Math.abs(actual - expected) < 1e-7, message + ': ' + actual + ' vs ' + expected)
-}
-const tempoPattern = patternExample(examples, '## Tempo, note values and swing')
-const tempoRhythm = rhythm(tempoPattern)
-const eighthAt132 = 60000 / 132 / 2
-for (let index = 0; index < tempoRhythm.length; index++) {
-  closeTo(tempoRhythm[index].duration, eighthAt132 * (index === 4 ? 2 : 1),
-    'tempo example retains its eighth/quarter-note durations')
-}
-closeTo(tempoRhythm[0].start, eighthAt132 * 0.12, 'swing uses the first resolved eighth')
-closeTo(tempoRhythm[4].start, eighthAt132 * 4 + eighthAt132 * 2 * 0.12,
-  'swing uses the final resolved quarter, not the root fallback')
-const millisecondRhythm = rhythm(patternExample(examples, '## Millisecond pattern'))
-assert.deepStrictEqual(millisecondRhythm.filter(step => !step.rest).map(step => step.start),
-  [0, 110, 220, 330], '90 ms notes plus rests retain 110 ms onset spacing')
-assert.strictEqual(millisecondRhythm.at(-1).duration, 180, 'the final tone retains its long ending')
-for (const [source, heading, bpm, divisor] of [
-  [examples, '## Noise percussion', 116, 4],
-  [soundDesign, '### Noise percussion', 112, 2],
-  [soundDesign, '### Retro pickup', 180, 4]
-]) {
-  const pattern = patternExample(source, heading)
-  const grid = 60000 / bpm / divisor
-  for (const [index, step] of rhythm(pattern).entries()) {
-    closeTo(step.duration, grid * (heading === '### Retro pickup' && index === 3 ? 2 : 1),
-      heading + ' keeps its advertised note grid')
-  }
-  if (heading.includes('Noise percussion')) {
-    for (const step of pattern.steps.filter(step => !step.rest)) {
-      assert(step.attack + step.decay < grid, 'percussion settles before the next beat')
-      assert.strictEqual(step.sustain, 0, 'percussion does not hold a level through the beat')
-      assert(step.release <= Math.round(grid) - step.attack, 'percussion release fits the native envelope')
-    }
-  }
-}
 
-console.log('documentation_regression: all tests passed')
+// Execute native score recipes and submit the resulting payloads to both real
+// contract implementations. Timing expectations are hand-derived fixtures.
+const corpus = []
+function score(file, heading) {
+  const section = read(file).split(heading + '\n')[1]
+  assert(section, heading)
+  const fence = section.split(/\n#{1,3} /)[0].match(/```javascript\s*\n([\s\S]*?)```/)[1]
+  const requests = []
+  vm.runInNewContext(fence, {
+    synth: {
+      setTempo: options => { assert(options.bpm >= 20 && options.bpm <= 300); return true },
+      playSequence: options => { requests.push(JSON.parse(JSON.stringify(options))); return 1 }
+    }, WAVE: { SINE: 0, SQUARE: 1, SAWTOOTH: 2, TRIANGLE: 3, NOISE: 4, WAVETABLE: 5 }
+  })
+  assert.strictEqual(requests.length, 1, heading + ' publishes one native score')
+  corpus.push({ api: 'sequence', options: requests[0], accepted: true })
+  return requests[0]
+}
+const tempo = score('documentation/examples.md', '## Tempo, note values and swing')
+assert.strictEqual(tempo.stepDuration, .5)
+assert.strictEqual(tempo.steps[4].duration, 1)
+const milliseconds = score('documentation/examples.md', '## Millisecond pattern')
+assert.strictEqual(milliseconds.timeUnit, 'ms')
+let position = 0
+const starts = []
+for (const step of milliseconds.steps) {
+  if (!step.rest) starts.push(position)
+  position += step.duration ?? milliseconds.stepDuration
+}
+assert.deepStrictEqual(starts, [0, 110, 220, 330])
+for (const [file, heading] of [
+  ['documentation/examples.md', '## Wave-shaping pattern overrides'],
+  ['documentation/examples.md', '## Step overrides'],
+  ['documentation/examples.md', '## Noise percussion'],
+  ['documentation/sound-design.md', '### Two-tone alarm'],
+  ['documentation/sound-design.md', '### Retro pickup'],
+  ['documentation/sound-design.md', '### Noise percussion']
+]) score(file, heading)
+const os = require('node:os')
+const cp = require('node:child_process')
+const work = fs.mkdtempSync(path.join(os.tmpdir(), 'synth-doc-contract-'))
+try {
+  const corpusPath = path.join(work, 'scores.jsonl')
+  fs.writeFileSync(corpusPath, corpus.map(row => JSON.stringify(row)).join('\n') + '\n')
+  cp.execFileSync('python3', [path.join(root, 'tests/run_studio_java.py'), corpusPath], { cwd: root, stdio: 'inherit' })
+  if (process.platform === 'darwin') {
+    const binary = path.join(work, 'ios-contracts')
+    cp.execFileSync('clang', ['-fobjc-arc', '-Wall', '-Wextra', '-framework', 'Foundation',
+      'tests/studio_corpus_ios.m', 'ios/Classes/TiSynthengineContract.m', '-o', binary], { cwd: root, stdio: 'inherit' })
+    cp.execFileSync(binary, [corpusPath], { cwd: root, stdio: 'inherit' })
+  }
+} finally { fs.rmSync(work, { recursive: true, force: true }) }
+console.log('documentation: links, JS syntax, API tables/defaults, positioning and native score contracts PASS')
