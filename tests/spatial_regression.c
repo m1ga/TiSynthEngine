@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #if __has_include("../shared/synth_spatial.h")
 #include "../shared/synth_spatial.h"
@@ -8,7 +9,37 @@ static void impulse(float x, float y, int rate, float *l, float *r) {
   SynthSpatial s; synth_spatial_init(&s, x, y, rate);
   for (int i=0;i<640;i++) synth_spatial_process(&s, i==0 ? 1.0f:0.0f, &l[i], &r[i]);
 }
+static int consecutive_blocks_match_streaming(void) {
+ const int rates[]={8000,16000,44100,48000,96000,192000};
+ const int sizes[]={0,1,3,4,7,8,9,15,16,17,23,31};
+ uint32_t seed=1;
+ for(unsigned rate=0;rate<sizeof(rates)/sizeof(rates[0]);rate++) {
+  SynthSpatial streaming,blocked;
+  synth_spatial_init(&streaming,.6f,-.4f,rates[rate]);blocked=streaming;
+  for(int block=0;block<256;block++) {
+   if(block%13==0) {
+    SynthSpatialPrepared target;
+    synth_spatial_prepare(&target,(block%9-4)/4.0f,(block%7-3)/3.0f,rates[rate]);
+    synth_spatial_set_target(&streaming,&target,1+block%17);
+    synth_spatial_set_target(&blocked,&target,1+block%17);
+   }
+   int count=sizes[block%(sizeof(sizes)/sizeof(sizes[0]))];
+   float input[31],left[31],right[31],expectedL[31],expectedR[31];
+   for(int i=0;i<count;i++) {
+    seed=seed*1664525u+1013904223u;
+    input[i]=block%4==0?0.0f:(int32_t)seed/2147483648.0f;
+    synth_spatial_process(&streaming,input[i],expectedL+i,expectedR+i);
+   }
+   synth_spatial_process_block(&blocked,input,left,right,count);
+   REQUIRE(memcmp(left,expectedL,count*sizeof(float))==0);
+   REQUIRE(memcmp(right,expectedR,count*sizeof(float))==0);
+   REQUIRE(memcmp(&streaming,&blocked,sizeof(streaming))==0);
+  }
+ }
+ return 0;
+}
 int main(void) {
+ REQUIRE(consecutive_blocks_match_streaming()==0);
  float l[640],r[640],ll[640],rr[640],up[640],down[640];
  impulse(1,0,44100,l,r); impulse(-1,0,44100,ll,rr);
  double near=0,far=0;

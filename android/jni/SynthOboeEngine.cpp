@@ -403,6 +403,12 @@ public:
     updateSequenceOwnership();
     const bool processEffects=effectsActive_;
     auto *output = static_cast<float *>(audioData);
+    bool spatialBlocks=false;
+#if defined(__aarch64__)
+    spatialBlocks=stats_.spatial>0;
+    if(!spatialBlocks&&stats_.tails>0)for(const Tail &tail:tails_)if(tail.active&&tail.spatial){spatialBlocks=true;break;}
+#endif
+    if(!spatialBlocks) {
     for (int32_t frame = 0; frame < frames; ++frame) {
       if(transport_.activeMask)for(int slot=0;slot<transport_.capacity;slot++)if(transport_.activeMask&(1u<<slot))processSequence(slot);
       double left=0,right=0,selectedL=0,selectedR=0;
@@ -431,6 +437,75 @@ public:
       output[frame * 2 + 1] =
           static_cast<float>(clampValue(outputR_, -1.0, 1.0));
       if (measure) synth_stats_sample(&stats_, output[frame*2], output[frame*2+1], limiterGain_, renderSampleRate_);
+    }
+    }else {
+    constexpr int tileCapacity=16;
+    for (int32_t frame=0;frame<frames;) {
+      // Sequence boundaries are processed only at their actual sample, before
+      // planning clocks. Future attacks must never steal voices ahead of time.
+      if(transport_.activeMask)for(int slot=0;slot<transport_.capacity;slot++)if(transport_.activeMask&(1u<<slot))processSequence(slot);
+      double beats[tileCapacity],milliseconds[tileCapacity];
+      double dryL[tileCapacity]={},dryR[tileCapacity]={},selectedL[tileCapacity]={},selectedR[tileCapacity]={};
+      int count=0;
+      do {
+        beats[count]=transport_.beat;milliseconds[count]=transport_.milliseconds;
+        synth_transport_advance_sample(&transport_);++count;
+        bool due=false;
+        if(transport_.activeMask)for(int slot=0;slot<transport_.capacity;slot++)if(transport_.activeMask&(1u<<slot)) {
+          const auto &sequence=transport_.slots[slot];
+          if(sequence.beat+1e-10>=sequence.nextBeat){due=true;break;}
+        }
+        if(due)break;
+      }while(count<tileCapacity&&frame+count<frames);
+      // Voice order remains identical for every individual frame. A small
+      // tile keeps one voice's FIR data resident across consecutive samples.
+      auto mix=[&](int n,double l,double r,double send) {
+        if(!processEffects){dryL[n]+=l;dryR[n]+=r;}
+        else if(send==1){selectedL[n]+=l;selectedR[n]+=r;}
+        else if(send==0){dryL[n]+=l;dryR[n]+=r;}
+        else{dryL[n]+=l*(1-send);dryR[n]+=r*(1-send);selectedL[n]+=l*send;selectedR[n]+=r*send;}
+      };
+      if(stats_.active>0)for(Voice &voice:voices_)if(voice.active) {
+        if(voice.spatial) {
+          float mono[tileCapacity],l[tileCapacity],r[tileCapacity];double sends[tileCapacity];int n=0;
+          for(;n<count&&voice.active;n++) {
+            double ignoredL=0,ignoredR=0;
+            renderVoice<true>(voice,ignoredL,ignoredR,beats[n],milliseconds[n],mono+n);
+            sends[n]=processEffects?synth_send_tick(&voice.send):0;
+          }
+          synth_spatial_process_block(&voice.spatialState,mono,l,r,n);
+          for(int i=0;i<n;i++)mix(i,l[i],r[i],sends[i]);
+        }else for(int n=0;n<count&&voice.active;n++) {
+          if(!processEffects)renderVoice(voice,dryL[n],dryR[n],beats[n],milliseconds[n]);
+          else {double l=0,r=0;renderVoice(voice,l,r,beats[n],milliseconds[n]);mix(n,l,r,synth_send_tick(&voice.send));}
+        }
+      }
+      if(stats_.tails>0)for(Tail &tail:tails_)if(tail.active) {
+        if(tail.spatial) {
+          float mono[tileCapacity],l[tileCapacity],r[tileCapacity];double sends[tileCapacity];int n=0;
+          for(;n<count&&tail.active;n++) {
+            double ignoredL=0,ignoredR=0;renderTail<true>(tail,ignoredL,ignoredR,mono+n);
+            sends[n]=processEffects?synth_send_tick(&tail.send):0;
+          }
+          synth_spatial_process_block(&tail.spatialState,mono,l,r,n);
+          for(int i=0;i<n;i++)mix(i,l[i],r[i],sends[i]);
+        }else for(int n=0;n<count&&tail.active;n++) {
+          if(!processEffects)renderTail(tail,dryL[n],dryR[n]);
+          else {double l=0,r=0;renderTail(tail,l,r);mix(n,l,r,synth_send_tick(&tail.send));}
+        }
+      }
+      for(int n=0;n<count;n++,frame++) {
+        double left=dryL[n],right=dryR[n];
+        if(processEffects) {
+          smoothedMaster_+=(master_.load(std::memory_order_relaxed)-smoothedMaster_)/lookahead_;
+          synth_effects_process_routed(&effects_,transport_.bpm,left,right,selectedL[n],selectedR[n],smoothedMaster_,&left,&right);
+        }else{left+=selectedL[n];right+=selectedR[n];}
+        limit(left,right,measure,processEffects);
+        output[frame*2]=static_cast<float>(clampValue(outputL_,-1.0,1.0));
+        output[frame*2+1]=static_cast<float>(clampValue(outputR_,-1.0,1.0));
+        if(measure)synth_stats_sample(&stats_,output[frame*2],output[frame*2+1],limiterGain_,renderSampleRate_);
+      }
+    }
     }
     // Unconfigured processing cannot expose intermediate send values. Advance
     // its ramps at the block boundary before a later FX publication can apply.
@@ -890,13 +965,13 @@ private:
     tail->remaining = tail->total;
   }
 
-  void renderTail(Tail &tail, double &left, double &right) {
+  template<bool Deferred=false>
+  void renderTail(Tail &tail, double &left, double &right,float *mono=nullptr) {
     if (!tail.active)
       return;
     if (tail.spatial && tail.remaining <= 0) {
-      float l, r;
-      synth_spatial_process(&tail.spatialState, 0, &l, &r);
-      left += l; right += r;
+      if(Deferred) *mono=0;
+      else {float l,r;synth_spatial_process(&tail.spatialState,0,&l,&r);left+=l;right+=r;}
       if (--tail.spatialDrain <= 0) { tail.active = false; synth_stats_tail_end(&stats_); }
       return;
     }
@@ -926,9 +1001,8 @@ private:
                                    std::max(1, tail.total - 1));
     const double sample = wave * tail.volume * fade;
     if (tail.spatial) {
-      float spatialL, spatialR;
-      synth_spatial_process(&tail.spatialState, static_cast<float>(sample), &spatialL, &spatialR);
-      left += spatialL; right += spatialR;
+      if(Deferred) *mono=static_cast<float>(sample);
+      else {float spatialL,spatialR;synth_spatial_process(&tail.spatialState,static_cast<float>(sample),&spatialL,&spatialR);left+=spatialL;right+=spatialR;}
     } else {
       left += sample * tail.left;
       right += sample * tail.right;
@@ -943,16 +1017,18 @@ private:
       { tail.active = false; synth_stats_tail_end(&stats_); }
   }
 
-  __attribute__((always_inline)) void renderVoice(Voice &voice, double &left, double &right) {
+  __attribute__((always_inline)) void renderVoice(Voice &voice,double &left,double &right) {renderVoice<false,false>(voice,left,right,0,0);}
+
+  template<bool Deferred=false,bool Clocked=true>
+  __attribute__((always_inline)) void renderVoice(Voice &voice, double &left, double &right,double nowBeat,double nowMs,float *mono=nullptr) {
     if (!voice.active)
       return;
     if(voice.sequenceTimed&&!voice.held.releasing&&
-       (voice.sequenceUnit==SYNTH_SEQUENCE_MS?transport_.milliseconds:transport_.beat)+1e-10>=voice.sequenceOffBeat)
+       (voice.sequenceUnit==SYNTH_SEQUENCE_MS?(Clocked?nowMs:transport_.milliseconds):(Clocked?nowBeat:transport_.beat))+1e-10>=voice.sequenceOffBeat)
       synth_held_release(&voice.held,voice.envelope);
     if (voice.spatial && voice.played >= voice.duration) {
-      float l, r;
-      synth_spatial_process(&voice.spatialState, 0, &l, &r);
-      left += l; right += r;
+      if(Deferred) *mono=0;
+      else {float l,r;synth_spatial_process(&voice.spatialState,0,&l,&r);left+=l;right+=r;}
       if (--voice.spatialDrain <= 0) { voice.active = false; synth_stats_voice_end(&stats_, true); }
       return;
     }
@@ -975,7 +1051,7 @@ private:
       }
       if(voice.sequenceSweeps) {
         const auto &shape=voice.sequenceShape;
-        double now=voice.sequenceUnit==SYNTH_SEQUENCE_MS?transport_.milliseconds:transport_.beat;
+        double now=voice.sequenceUnit==SYNTH_SEQUENCE_MS?(Clocked?nowMs:transport_.milliseconds):(Clocked?nowBeat:transport_.beat);
         double f=clampValue((now-voice.sequenceStarted)/voice.sequenceLength,0.0,1.0);
         if(shape.frequencyEnd>0)voice.increment=(voice.sequenceStartFrequency+(shape.frequencyEnd-voice.sequenceStartFrequency)*f)/renderSampleRate_;
         if(shape.noiseRateEnd>0)voice.noiseIncrement=(shape.noiseRate>0?shape.noiseRate+(shape.noiseRateEnd-shape.noiseRate)*f:renderSampleRate_+(shape.noiseRateEnd-renderSampleRate_)*f)/renderSampleRate_;
@@ -984,8 +1060,8 @@ private:
         if(shape.fmDepthSweep)voice.fmDepth=shape.fmDepth+(shape.fmDepthEnd-shape.fmDepth)*f;
       }
     if(voice.sequenceSweeps&&voice.filter.type&&voice.sequenceShape.filterHzEnd>=SYNTH_FILTER_MIN_HZ&&
-       ((voice.sequenceFilterFrames++&15u)==0||((voice.sequenceUnit==SYNTH_SEQUENCE_MS?transport_.milliseconds:transport_.beat)>=voice.sequenceOffBeat&&voice.filterHz!=voice.sequenceShape.filterHzEnd))) {
-      double now=voice.sequenceUnit==SYNTH_SEQUENCE_MS?transport_.milliseconds:transport_.beat;
+       ((voice.sequenceFilterFrames++&15u)==0||((voice.sequenceUnit==SYNTH_SEQUENCE_MS?(Clocked?nowMs:transport_.milliseconds):(Clocked?nowBeat:transport_.beat))>=voice.sequenceOffBeat&&voice.filterHz!=voice.sequenceShape.filterHzEnd))) {
+      double now=voice.sequenceUnit==SYNTH_SEQUENCE_MS?(Clocked?nowMs:transport_.milliseconds):(Clocked?nowBeat:transport_.beat);
       double f=clampValue((now-voice.sequenceStarted)/voice.sequenceLength,0.0,1.0);
       double hz=synth_geometric_at(voice.sequenceShape.filterHz,voice.sequenceShape.filterHzEnd,f);
       if(voice.filterHz!=hz){voice.filterHz=hz;synth_filter_set(&voice.filter,hz,voice.filterQ,renderSampleRate_);}
@@ -1049,9 +1125,8 @@ private:
     voice.envelope = envelope;
     const double sample = wave * envelope * voice.volume;
     if (voice.spatial) {
-      float spatialL, spatialR;
-      synth_spatial_process(&voice.spatialState, static_cast<float>(sample), &spatialL, &spatialR);
-      left += spatialL; right += spatialR;
+      if(Deferred) *mono=static_cast<float>(sample);
+      else {float spatialL,spatialR;synth_spatial_process(&voice.spatialState,static_cast<float>(sample),&spatialL,&spatialR);left+=spatialL;right+=spatialR;}
     } else {
       left += sample * voice.left;
       right += sample * voice.right;

@@ -54,6 +54,7 @@ Beta for the planned first public release.
 
 ### Fixed
 
+- Reuse binaural FIR coefficients across eight consecutive samples on Android ARM64 while preserving sample results, sequence boundaries and release tails. The tested Sim80 headphone scene now reports zero output underruns and clean listening; this does not certify the separate maximum-load acceptance criteria.
 - Preserve compatible released-key oscillator phases and pre-envelope filter history so repeated sustained notes do not cancel their tails; independent envelopes, gains and IDs remain unchanged.
 - Protect sustained attack and release edges shorter than 3 ms from hard gating on Android and iOS. Longer envelopes and existing timed envelopes retain their behavior.
 - Make the Android native limiter reach its target within the lookahead deadline, matching iOS and the Java DSP reference. Dense sums now respect the configured ceiling instead of escaping into hard clipping; drained-window gain resets without changing below-ceiling source gain.

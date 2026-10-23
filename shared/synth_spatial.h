@@ -101,4 +101,110 @@ static inline void synth_spatial_process(SynthSpatial *s,float input,float *left
 #endif
   s->position=p?p-1:s->taps-1;
 }
+
+/* Process consecutive samples with the original per-sample partial sums.
+ * Reuse coefficients without changing multiplication/addition order.
+ * Input and output arrays must be disjoint. */
+#if defined(__ANDROID__) && defined(__aarch64__)
+static inline float synth_spatial_reduce_four(float32x4_t v) {
+ return (vgetq_lane_f32(v,0)+vgetq_lane_f32(v,1))+(vgetq_lane_f32(v,2)+vgetq_lane_f32(v,3));
+}
+/* Copy the old window before future inputs overwrite its oldest samples. */
+static inline void synth_spatial_process_four(SynthSpatial *s,const float *input,float *left,float *right){
+ if(s->rampRemaining>0){for(int f=0;f<4;f++)synth_spatial_process(s,input[f],left+f,right+f);return;}
+ float h[SYNTH_SPATIAL_MAX_TAPS+3];
+ memcpy(h+4,s->history+s->position+1,(s->taps-1)*sizeof(float));
+ for(int f=0;f<4;f++)h[3-f]=input[f];
+ float32x4_t l0=vdupq_n_f32(0),l1=l0,l2=l0,l3=l0,r0=l0,r1=l0,r2=l0,r3=l0;
+ int i=0,aligned=s->taps&~31;
+ {
+#pragma clang fp contract(off)
+ for(;i<aligned;i+=4){
+  float32x4_t cl=vld1q_f32(s->left+i),cr=vld1q_f32(s->right+i);
+  float32x4_t x0=vld1q_f32(h+3+i),x1=vld1q_f32(h+2+i),x2=vld1q_f32(h+1+i),x3=vld1q_f32(h+i);
+  l0=vaddq_f32(l0,vmulq_f32(x0,cl));r0=vaddq_f32(r0,vmulq_f32(x0,cr));
+  l1=vaddq_f32(l1,vmulq_f32(x1,cl));r1=vaddq_f32(r1,vmulq_f32(x1,cr));
+  l2=vaddq_f32(l2,vmulq_f32(x2,cl));r2=vaddq_f32(r2,vmulq_f32(x2,cr));
+  l3=vaddq_f32(l3,vmulq_f32(x3,cl));r3=vaddq_f32(r3,vmulq_f32(x3,cr));
+ }
+ }
+ for(;i<s->taps;i+=4){
+  float32x4_t cl=vld1q_f32(s->left+i),cr=vld1q_f32(s->right+i);
+  float32x4_t x0=vld1q_f32(h+3+i),x1=vld1q_f32(h+2+i),x2=vld1q_f32(h+1+i),x3=vld1q_f32(h+i);
+  l0=vfmaq_f32(l0,x0,cl);r0=vfmaq_f32(r0,x0,cr);
+  l1=vfmaq_f32(l1,x1,cl);r1=vfmaq_f32(r1,x1,cr);
+  l2=vfmaq_f32(l2,x2,cl);r2=vfmaq_f32(r2,x2,cr);
+  l3=vfmaq_f32(l3,x3,cl);r3=vfmaq_f32(r3,x3,cr);
+ }
+ left[0]=synth_spatial_reduce_four(l0);right[0]=synth_spatial_reduce_four(r0);left[1]=synth_spatial_reduce_four(l1);right[1]=synth_spatial_reduce_four(r1);
+ left[2]=synth_spatial_reduce_four(l2);right[2]=synth_spatial_reduce_four(r2);left[3]=synth_spatial_reduce_four(l3);right[3]=synth_spatial_reduce_four(r3);
+ for(int f=0;f<4;f++){int p=s->position;s->history[p]=input[f];s->history[p+s->taps]=input[f];s->position=p?p-1:s->taps-1;}
+}
+static inline void synth_spatial_process_eight(SynthSpatial *s,const float *input,float *left,float *right){
+ if(s->rampRemaining>0){for(int f=0;f<8;f++)synth_spatial_process(s,input[f],left+f,right+f);return;}
+ float h[SYNTH_SPATIAL_MAX_TAPS+7];
+ memcpy(h+8,s->history+s->position+1,(s->taps-1)*sizeof(float));
+ for(int f=0;f<8;f++)h[7-f]=input[f];
+ float32x4_t l0=vdupq_n_f32(0),l1=vdupq_n_f32(0),l2=vdupq_n_f32(0),l3=vdupq_n_f32(0),l4=vdupq_n_f32(0),l5=vdupq_n_f32(0),l6=vdupq_n_f32(0),l7=vdupq_n_f32(0),r0=vdupq_n_f32(0),r1=vdupq_n_f32(0),r2=vdupq_n_f32(0),r3=vdupq_n_f32(0),r4=vdupq_n_f32(0),r5=vdupq_n_f32(0),r6=vdupq_n_f32(0),r7=vdupq_n_f32(0);
+ int i=0,aligned=s->taps&~31;
+ {
+#pragma clang fp contract(off)
+ for(;i<aligned;i+=4){
+  float32x4_t cl=vld1q_f32(s->left+i),cr=vld1q_f32(s->right+i);
+  float32x4_t x0=vld1q_f32(h+7+i);
+  l0=vaddq_f32(l0,vmulq_f32(x0,cl));r0=vaddq_f32(r0,vmulq_f32(x0,cr));
+  float32x4_t x1=vld1q_f32(h+6+i);
+  l1=vaddq_f32(l1,vmulq_f32(x1,cl));r1=vaddq_f32(r1,vmulq_f32(x1,cr));
+  float32x4_t x2=vld1q_f32(h+5+i);
+  l2=vaddq_f32(l2,vmulq_f32(x2,cl));r2=vaddq_f32(r2,vmulq_f32(x2,cr));
+  float32x4_t x3=vld1q_f32(h+4+i);
+  l3=vaddq_f32(l3,vmulq_f32(x3,cl));r3=vaddq_f32(r3,vmulq_f32(x3,cr));
+  float32x4_t x4=vld1q_f32(h+3+i);
+  l4=vaddq_f32(l4,vmulq_f32(x4,cl));r4=vaddq_f32(r4,vmulq_f32(x4,cr));
+  float32x4_t x5=vld1q_f32(h+2+i);
+  l5=vaddq_f32(l5,vmulq_f32(x5,cl));r5=vaddq_f32(r5,vmulq_f32(x5,cr));
+  float32x4_t x6=vld1q_f32(h+1+i);
+  l6=vaddq_f32(l6,vmulq_f32(x6,cl));r6=vaddq_f32(r6,vmulq_f32(x6,cr));
+  float32x4_t x7=vld1q_f32(h+0+i);
+  l7=vaddq_f32(l7,vmulq_f32(x7,cl));r7=vaddq_f32(r7,vmulq_f32(x7,cr));
+ }
+ }
+ for(;i<s->taps;i+=4){
+  float32x4_t cl=vld1q_f32(s->left+i),cr=vld1q_f32(s->right+i);
+  float32x4_t x0=vld1q_f32(h+7+i);
+  l0=vfmaq_f32(l0,x0,cl);r0=vfmaq_f32(r0,x0,cr);
+  float32x4_t x1=vld1q_f32(h+6+i);
+  l1=vfmaq_f32(l1,x1,cl);r1=vfmaq_f32(r1,x1,cr);
+  float32x4_t x2=vld1q_f32(h+5+i);
+  l2=vfmaq_f32(l2,x2,cl);r2=vfmaq_f32(r2,x2,cr);
+  float32x4_t x3=vld1q_f32(h+4+i);
+  l3=vfmaq_f32(l3,x3,cl);r3=vfmaq_f32(r3,x3,cr);
+  float32x4_t x4=vld1q_f32(h+3+i);
+  l4=vfmaq_f32(l4,x4,cl);r4=vfmaq_f32(r4,x4,cr);
+  float32x4_t x5=vld1q_f32(h+2+i);
+  l5=vfmaq_f32(l5,x5,cl);r5=vfmaq_f32(r5,x5,cr);
+  float32x4_t x6=vld1q_f32(h+1+i);
+  l6=vfmaq_f32(l6,x6,cl);r6=vfmaq_f32(r6,x6,cr);
+  float32x4_t x7=vld1q_f32(h+0+i);
+  l7=vfmaq_f32(l7,x7,cl);r7=vfmaq_f32(r7,x7,cr);
+ }
+ left[0]=synth_spatial_reduce_four(l0);right[0]=synth_spatial_reduce_four(r0);
+ left[1]=synth_spatial_reduce_four(l1);right[1]=synth_spatial_reduce_four(r1);
+ left[2]=synth_spatial_reduce_four(l2);right[2]=synth_spatial_reduce_four(r2);
+ left[3]=synth_spatial_reduce_four(l3);right[3]=synth_spatial_reduce_four(r3);
+ left[4]=synth_spatial_reduce_four(l4);right[4]=synth_spatial_reduce_four(r4);
+ left[5]=synth_spatial_reduce_four(l5);right[5]=synth_spatial_reduce_four(r5);
+ left[6]=synth_spatial_reduce_four(l6);right[6]=synth_spatial_reduce_four(r6);
+ left[7]=synth_spatial_reduce_four(l7);right[7]=synth_spatial_reduce_four(r7);
+ for(int f=0;f<8;f++){int p=s->position;s->history[p]=input[f];s->history[p+s->taps]=input[f];s->position=p?p-1:s->taps-1;}
+}
+#endif
+static inline void synth_spatial_process_block(SynthSpatial *s,const float *input,float *left,float *right,int frames) {
+ int i=0;
+#if defined(__ANDROID__) && defined(__aarch64__)
+ for(;i+7<frames;i+=8)synth_spatial_process_eight(s,input+i,left+i,right+i);
+ for(;i+3<frames;i+=4)synth_spatial_process_four(s,input+i,left+i,right+i);
+#endif
+ for(;i<frames;i++)synth_spatial_process(s,input[i],left+i,right+i);
+}
 #endif
