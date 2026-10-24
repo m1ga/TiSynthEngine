@@ -7,6 +7,8 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument('snapshot', type=Path)
+parser.add_argument('--ios-preferred-sample-rate', type=int, choices=[16000, 44100, 48000, 96000, 192000],
+                    help='Diagnostic-only session preference before audio starts; actual rate must be verified')
 args = parser.parse_args()
 root = args.snapshot.resolve()
 production = Path(__file__).resolve().parents[2]
@@ -103,6 +105,15 @@ if module.exists():
   }
 #endif
 '''.replace('total=0;c', 'total=0;')
+    if args.ios_preferred_sample_rate is not None:
+        addition += '''#ifdef SYNTH_PHYSICAL_STATS
+  if(!audioEngine) {
+    NSError *physicalRateError=nil;
+    BOOL physicalRateAccepted=[[AVAudioSession sharedInstance] setPreferredSampleRate:%d error:&physicalRateError];
+    r[@"physicalPreferredSampleRateRequest"]=@{@"requested":@(%d),@"accepted":@(physicalRateAccepted),@"error":physicalRateError?(id)physicalRateError.localizedDescription:[NSNull null]};
+  }
+#endif
+''' % (args.ios_preferred_sample_rate, args.ios_preferred_sample_rate)
     assert marker in m
     m = m.replace(marker, addition + marker, 1)
     module.write_text(m)
@@ -113,6 +124,8 @@ manifest = {'productionStatsSha256': hashlib.sha256(original.encode()).hexdigest
             'compileFlag': 'SYNTH_PHYSICAL_STATS=1', 'buckets': 2048, 'binWidthLoad': 0.001,
             'overflowLower': 2.047, 'deadlineMissThreshold': 'render seconds > callback frames / sample rate',
             'reset': 'epoch tags; O(1) callback reset', 'callbackMemory': 'fixed atomic scalar arrays; no allocation, lock, wait or scan',
-            'freeze': 'control request acknowledged at next callback; stable histogram thereafter'}
+            'freeze': 'control request acknowledged at next callback; stable histogram thereafter',
+            'iosPreferredSampleRate': args.ios_preferred_sample_rate,
+            'preferredRateScope': 'Diagnostic getStats before audioEngine exists; no buffer request; verify actual source/session rates'}
 (root/'physical-instrumentation.json').write_text(json.dumps(manifest, indent=2)+'\n')
 print(json.dumps(manifest))

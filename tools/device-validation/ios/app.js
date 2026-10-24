@@ -15,6 +15,8 @@ function fail (message) { report.failure = message; writeReport('failed'); label
 var ids = []
 function begin () {
   var baseline = synth.getStats({ physicalMemory: true })
+  report.preferredSampleRateRequest = baseline.physicalPreferredSampleRateRequest || null
+  if (report.preferredSampleRateRequest && !report.preferredSampleRateRequest.accepted) return fail('Preferred sample rate request rejected')
   report.baselineProcessMemory = baseline.physicalProcessMemory
   report.baselineAudioSession = baseline.physicalAudioSession
   report.beforeStartSystemAvailableMemory = Ti.Platform.availableMemory
@@ -44,6 +46,11 @@ function measure () {
   var feasibility = synth.getStats({ physicalMemory: true })
   report.feasibility = feasibility
   if (!feasibility.physicalTelemetry || feasibility.physicalTelemetry.callbacks < 100) return fail('physical telemetry missing')
+  if (report.preferredSampleRateRequest) {
+    var requestedRate = report.preferredSampleRateRequest.requested
+    var session = feasibility.physicalAudioSession
+    if (!session || feasibility.sampleRate !== requestedRate || session.sessionSampleRate !== requestedRate || session.sourceNodeSampleRate !== requestedRate || session.outputNodeSampleRate !== requestedRate) return fail('Requested sample rate unavailable on this route')
+  }
   if (feasibility.activeVoices !== 32 || ids.some(function (id) { return !synth.getSequenceState({ sequenceId: id }) })) return fail('full load not active')
   synth.resetStats()
   var started = Date.now()
