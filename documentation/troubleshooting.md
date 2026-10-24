@@ -195,3 +195,9 @@ Disabling effects closes input smoothly and lets bounded tails finish, then bypa
 Enable diagnostics, reset deliberately, then inspect `preLimiterPeakDb` and `maxLimiterReductionDb`. They retain the native pre-limiter peak and greatest attenuation since reset, including brief interventions between UI polls. `limiterReductionDb` is a window measurement and can return to zero sooner. Older packages may omit the accumulated fields; disabled/unmeasured diagnostics return `null`. See [measurement example](examples.md#measure-peaks-and-limiter-reduction).
 
 If accumulated attenuation remains near zero, investigate phase cancellation between repeated same-pitch oscillators, changing filters or the device speaker/protection path. Compatible released public held-note repetitions preserve predecessor phase; simultaneous unisons, timed calls and transport notes retain their existing phase behavior. Extra effects and resonance can consume headroom even when source gain is fixed. Compare matched levels through headphones and the physical speaker before changing the mix globally.
+
+## A wavetable sounds rough
+
+`WAVETABLE` repeats the supplied values using a stepped lookup. A short table can sound grainy or buzzy even when its values describe a sine wave and `bitDepth` is 0. Its harmonic character changes with pitch and filtering; this does not require reverb, an LFO or creative saturation to be enabled.
+
+Compare one note with `SINE`, at a comfortable matched level, to distinguish the source's texture from the combined sound of overlapping notes. Read `preLimiterPeakDb` and `maxLimiterReductionDb` with diagnostics enabled to investigate mix headroom. No limiter reduction does not prove that the physical speaker, headphones or output processing are clean. Keep a subjective listening observation separate from a confirmed clipping or buffer-loss diagnosis.

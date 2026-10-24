@@ -20,7 +20,9 @@ Start with the [README](../README.md) if you have not installed the module yet. 
 - [Recommendations](recommendations.md): gain staging, lifecycle and testing.
 - [Troubleshooting](troubleshooting.md): rejected calls, silence and glitches.
 - [Performance validation](stats-performance.md): host comparisons, physical results and measurement limits.
-- [Physical validation evidence](physical-validation.json): device load, callback histogram, memory and acceptance status.
+- [Current performance audit](performance-review.json): retained improvements, rejected Apple experiments, final package verification and explicit certification limits.
+- [Current audit evidence](performance-review-evidence.zip): paired measurements, physical reports and reproducible checks.
+- [Earlier physical validation evidence](physical-validation.json): the preceding device-load, callback-histogram and memory snapshot; consult the current audit for later findings.
 - [Third-party notices](third-party-notices.md): licenses of bundled dependencies.
 
 The runnable Titanium app is in [`example/app.js`](../example/app.js); follow its [setup and device checklist](../example/README.md). Host-side contract and DSP regressions are in [`tests/`](../tests/) and [`android/test/`](../android/test/). The DSP math both platforms share is in [`shared/`](../shared/).

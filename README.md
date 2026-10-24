@@ -10,6 +10,21 @@ Use TiSynthEngine for game and interface feedback, retro effects, alarms, notes,
 
 It is a synthesizer, not a sample player. It does not decode `.wav` or `.mp3` files, play recorded samples or provide MIDI. Sustained voices use app-supplied IDs for release and live updates. See [known limits](documentation/recommendations.md#known-limits) before using it for a long-running music or ambience system.
 
+## Find your starting point
+
+| You want to... | Read this |
+| --- | --- |
+| Install the module and hear a first note | [Install](#install) and [quick start](#quick-start) |
+| Add game sounds or interface feedback | [Sound design and recipes](documentation/sound-design.md) |
+| Build playable keys or a sustained game motor | [Held voice ownership](documentation/guide.md#hold-and-edit-a-voice) |
+| Schedule music, chords, swing or arpeggios | [Native musical transport](documentation/guide.md#choose-the-musical-transport) |
+| Find an option, range or return value | [API reference](documentation/api.md) |
+| Run an interactive device example | [Example app and checklist](example/README.md) |
+| Diagnose silence, rough sound or missed audio buffers | [Troubleshooting](documentation/troubleshooting.md) and [statistics](documentation/stats-performance.md) |
+| Understand what has actually been verified | [Validation and performance](#validation-and-performance) |
+
+The [documentation index](documentation/index.md) connects all guides. Start with the [sound design guide](documentation/sound-design.md) if synthesis terminology is new to you.
+
 ## Requirements
 
 - Titanium SDK 13.2.0.GA or newer.
@@ -38,6 +53,8 @@ The Titanium CLI will install them under `modules/<platform>/ti.synthengine/1.0.
 
 ## Quick start
 
+Run this after the owning window has settled. The [layout-aware startup](#start-after-layout) section below shows how to defer startup and cancel it during cleanup.
+
 ```javascript
 var synth = require('ti.synthengine')
 var contract = synth.getDefaults()
@@ -54,7 +71,10 @@ if (synth.start({
   throw new Error('The audio engine could not start')
 }
 
-synth.playTone({ note: 'A4' })
+if (!synth.playTone({ note: 'A4' })) {
+  synth.shutdown()
+  throw new Error('The first note was rejected')
+}
 ```
 
 This game-oriented example uses `ambient`: on iOS it respects silent mode and mixes with other apps. The module default is `playback`, which ignores silent mode. Android validates this option without changing its output. Changing the session policy requires `shutdown()` followed by `start()`.
@@ -115,7 +135,7 @@ The module exposes nineteen methods and one event, `sequenceend`.
 | `setTempo({ bpm })` | `Boolean` | Changes global musical tempo, preserving position. |
 | `updateSequence({ sequenceId, ...changes })` | `Boolean` | Publishes an atomic transport edit without restarting. |
 | `stopSequence({ sequenceId })` | `Boolean` | Stops transport and releases only its voices. |
-| `getSequenceState({ sequenceId })` | `Object` | Reports applied step, musical position, tempo and revision. |
+| `getSequenceState({ sequenceId })` | `Object` or `null` | Reports applied step, musical position, tempo and revision. |
 | `setMasterProcessing(options)` | `Boolean` | Configures fixed input gain, stereo effects and optional saturation. |
 | `setVolume(options)`    | `Boolean` | Changes the master level with a short ramp.                                                              |
 | `stopAll()`             | nothing   | Releases all sounding voices through a short fade.                                                       |
@@ -165,13 +185,13 @@ synth.playTone({ note: 'C4', duraton: 200 })
 // false; "duraton" is not a supported option
 ```
 
-Each distinct validation failure writes one structured warning to logcat or the Xcode console:
+When a validation failure emits a structured diagnostic, it uses this form in logcat or the Xcode console:
 
 ```text
 event=validation_warning method=playTone key=duraton reason=unsupported_option action=rejected value=200
 ```
 
-Warnings are deduplicated by method, key and reason so a bad call in a loop does not flood the log. The [API reference](documentation/api.md) lists every accepted option and rejection reason.
+Warnings are deduplicated by method, key and reason so a bad call in a loop does not flood the log. Some transport and control failures return rejection without a structured warning; always check the return value. The [API reference](documentation/api.md) lists accepted options and rejection reasons.
 
 ## Notes and frequencies
 
@@ -221,7 +241,7 @@ synth.playTone({
 | `NOISE`     |   `4` | White or sample-and-hold noise for hits and texture.      |
 | `WAVETABLE` |   `5` | A repeating stepped table supplied by the caller.         |
 
-Square and sawtooth use PolyBLEP band-limiting. Noise is unpitched, so its `frequency` value does not change the sound. `WAVETABLE` requires `waveTable` with 2 to 64 values from -1 to 1.
+Square and sawtooth use PolyBLEP band-limiting. Noise is unpitched, so its `frequency` value does not change the sound. `WAVETABLE` requires `waveTable` with 2 to 64 values from -1 to 1. Its stepped lookup can add digital grain even when the table contains sine samples; the character changes with pitch. This is distinct from clipping or an enabled saturation effect. See [rough wavetable sound](documentation/troubleshooting.md#a-wavetable-sounds-rough).
 
 ## Wave-shaping controls
 
@@ -429,6 +449,20 @@ Connecting or disconnecting an output may cut the note crossing the hardware tra
 - [Audio engine internals](documentation/audio-engine.md)
 - [Recommendations](documentation/recommendations.md)
 - [Troubleshooting](documentation/troubleshooting.md)
+
+## Validation and performance
+
+The current beta has real Android builds for all four listed ABIs and Apple builds for device, simulator and Catalyst. The own-Apple renderer was compared byte-for-byte with its frozen reference across 120 scenarios, five sample rates from 16 to 192 kHz, and short, irregular and 1024-frame blocks. Audio and original semantic state matched. These Apple results compare the Apple renderer with its own reference; they do not claim sample equality between Android and iOS.
+
+Full-score publication and control-memory improvements are retained. The experimental Apple FIR/cache/idle-effects bundle was removed after physical 32-voice stereo timing regressed. Production iOS retains its original renderer. No buffer increase, added latency or reduction in voices, effects or quality was used to improve a result.
+
+| Evidence | What it establishes | What remains open |
+| --- | --- | --- |
+| Native builds and contract/renderer checks | Build coverage, accepted payloads and the recorded own-platform audio/state comparisons | Hardware timing and audible output require device checks |
+| Android and iPad game runs | Approximately 60 FPS in the measured Sim20 and Sim80 scenarios | Strict iPad population-matched comparison remains inconclusive; occasional Android Sim80 output underruns persist |
+| Physical load and memory tests | Recorded callback deadlines, bounded recovery checks and compact 48 kHz memory measurements | The extreme Android load fails feasibility; physical 192 kHz memory/output and full listening certification remain open |
+
+Read the [performance review](documentation/performance-review.json) for accepted, rejected and pending candidates, and the [raw evidence archive](documentation/performance-review-evidence.zip) for reproducibility. Host CPU measurements are not whole-app CPU measurements or promises of the same gain on a device. The [statistics guide](documentation/stats-performance.md) explains how to interpret the counters.
 
 ## Build and test
 

@@ -4,7 +4,7 @@ Module id: `ti.synthengine`
 
 Public API version: `1.0.0`
 
-Android and iOS expose the same nineteen methods, one event, defaults, limits, waveform values and validation behavior. Option objects are strict: an unknown key is rejected with `unsupported_option`.
+Android and iOS expose the same nineteen methods, one event and waveform values. Option objects are strict: an unknown key is rejected with `unsupported_option`. Reported beta metadata and rejection diagnostics have platform differences; this reference does not promise sample-identical rendering between Android and iOS.
 
 ## Return values
 
@@ -20,7 +20,7 @@ Returns the installed contract without starting the audio stream.
 var contract = synth.getDefaults()
 ```
 
-The result has this shape:
+The shared result has this shape; Android adds the beta metadata described below:
 
 ```javascript
 {
@@ -70,6 +70,7 @@ The result has this shape:
   limits: { /* ranges listed below */ },
   mixingProfiles: ['conservative', 'raw', 'balanced', 'speakerSafe'],
   audioSessions: ['playback', 'ambient'],
+  buses: ['music', 'effects', 'ui', 'ambience'],
   filterTypes: ['none', 'lowpass', 'highpass', 'bandpass'],
   waveTypes: {
     SINE: 0,
@@ -83,6 +84,8 @@ The result has this shape:
 ```
 
 `fmDepthEnd`, `detunes`, `spatialX` and `spatialY` have no reported default: their presence changes how the call is interpreted. Supplying a spatial coordinate enables binaural; the other coordinate then defaults to 0 internally. The maximum frequency is `sampleRate * 0.45`. Before the stream opens, the reported fallback is 19,845 Hz. Read the object again after `start()` if the precise device limit matters.
+
+Android additionally reports `capabilities` flags for native sequences, master processing and modulations, plus `limits.stepDurationMs`. The current iOS result omits those keys while implementing the corresponding methods and millisecond sequences. Detect a required method with `typeof synth.playSequence === 'function'` (and the other methods your feature needs); a missing capability flag is not proof that a method is unavailable. Both platforms report the `limits` object shown here.
 
 ## Limits
 
@@ -490,7 +493,7 @@ synth.removeEventListener('sequenceend', onSequenceEnd)
 
 ## Strict validation
 
-Unknown keys and invalid values return `false` and produce one deduplicated native log entry:
+Rejected Boolean calls return `false`; `playSequence` returns `0`. Where structured validation diagnostics are emitted, they follow this format:
 
 ```text
 event=validation_warning method=playTone key=duraton reason=unsupported_option action=rejected value=200
@@ -526,6 +529,8 @@ Common reasons include:
 | `fm_depth_required`                      | `fmRatio` is set while FM is off.                                                            |
 
 Explicit values are not clamped. Read `getDefaults().limits` when accepting user input and decide in the app whether to reject or constrain it.
+
+Some transport and control rejection paths do not emit a structured warning. Check acceptance directly; absence of a log entry does not prove success.
 
 ## Binaural front-plane positioning
 
