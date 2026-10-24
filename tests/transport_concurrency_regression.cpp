@@ -18,9 +18,17 @@ int main() {
   }
  });
  for(uint32_t id=1;id<=1000;id++) {
+#ifdef SYNTH_REPLACEMENT_PUBLICATION
+  auto *c=synth_transport_begin_write_full(&t,id,1);assert(c);synth_sequence_defaults(c);
+#else
   auto *c=synth_transport_begin_write(&t,id,1);assert(c);
+#endif
   c->timeUnit=SYNTH_SEQUENCE_MS;c->stepDuration=1;c->stepCount=1;c->steps[0].noteCount=1;c->steps[0].notes[0]=60;
+#ifdef SYNTH_REPLACEMENT_PUBLICATION
+  assert(synth_sequence_prepare(c));assert(synth_transport_commit_prepared(&t,c,1));
+#else
   assert(synth_transport_commit(&t,c,1));
+#endif
   if(id&1)synth_transport_request_stop(&t,id);
   SynthSequenceState s;synth_transport_state(&t,id,&s);
   SynthSequenceEnd e;

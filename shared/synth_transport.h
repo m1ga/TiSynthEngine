@@ -30,7 +30,7 @@ static inline int synth_transport_bank_slot(SynthTransport *t,const SynthSequenc
  for(int i=0;i<t->capacity;i++)if(synth_sequence_bank_index(&t->slots[i],c)>=0)return i;
  return -1;
 }
-static inline SynthSequenceConfig *synth_transport_begin_write(SynthTransport *t,uint32_t id,int restart) {
+static inline SynthSequenceConfig *synth_transport_begin_write_mode(SynthTransport *t,uint32_t id,int restart,int full) {
  if(!id)return 0;
  int index=synth_transport_find(t,id);
  if(restart) {
@@ -43,9 +43,15 @@ static inline SynthSequenceConfig *synth_transport_begin_write(SynthTransport *t
   }
  }else if(index<0||__atomic_load_n(&t->status[index],__ATOMIC_ACQUIRE)!=2)return 0;
  if(index<0)return 0;
- SynthSequenceConfig *c=synth_sequence_begin_write(&t->slots[index]);
+ SynthSequenceConfig *c=full?synth_sequence_reserve_write(&t->slots[index]):synth_sequence_begin_write(&t->slots[index]);
  if(!c&&restart) {__atomic_store_n(&t->ids[index],0,__ATOMIC_RELEASE);__atomic_store_n(&t->status[index],0,__ATOMIC_RELEASE);}
  return c;
+}
+static inline SynthSequenceConfig *synth_transport_begin_write(SynthTransport *t,uint32_t id,int restart) {
+ return synth_transport_begin_write_mode(t,id,restart,0);
+}
+static inline SynthSequenceConfig *synth_transport_begin_write_full(SynthTransport *t,uint32_t id,int restart) {
+ return synth_transport_begin_write_mode(t,id,restart,1);
 }
 static inline void synth_transport_cancel_write(SynthTransport *t,SynthSequenceConfig *c) {
  int i=synth_transport_bank_slot(t,c);if(i<0)return;
@@ -54,13 +60,13 @@ static inline void synth_transport_cancel_write(SynthTransport *t,SynthSequenceC
   __atomic_store_n(&t->ids[i],0,__ATOMIC_RELEASE);__atomic_store_n(&t->status[i],0,__ATOMIC_RELEASE);
  }
 }
-static inline int synth_transport_commit(SynthTransport *t,SynthSequenceConfig *c,int restart) {
+static inline int synth_transport_commit_mode(SynthTransport *t,SynthSequenceConfig *c,int restart,int prepared) {
  int i=synth_transport_bank_slot(t,c);if(i<0)return 0;
  uint32_t status=__atomic_load_n(&t->status[i],__ATOMIC_ACQUIRE);
  if((restart&&status!=1)||(!restart&&status!=2)) {synth_sequence_cancel_write(&t->slots[i],c);return 0;}
  /* Tempo is published independently; a structural bank cannot change it. */
  c->bpm=120;
- if(!synth_sequence_commit(&t->slots[i],c,restart)) {
+ if(!(prepared?synth_sequence_commit_prepared(&t->slots[i],c,restart):synth_sequence_commit(&t->slots[i],c,restart))) {
   if(__atomic_load_n(&t->status[i],__ATOMIC_ACQUIRE)==1) {
    __atomic_store_n(&t->ids[i],0,__ATOMIC_RELEASE);__atomic_store_n(&t->status[i],0,__ATOMIC_RELEASE);
   }
@@ -68,6 +74,13 @@ static inline int synth_transport_commit(SynthTransport *t,SynthSequenceConfig *
  }
  if(restart)__atomic_store_n(&t->status[i],2,__ATOMIC_RELEASE);
  return 1;
+}
+static inline int synth_transport_commit(SynthTransport *t,SynthSequenceConfig *c,int restart) {
+ return synth_transport_commit_mode(t,c,restart,0);
+}
+/* Caller has prepared a complete, validated score on the serialized producer. */
+static inline int synth_transport_commit_prepared(SynthTransport *t,SynthSequenceConfig *c,int restart) {
+ return synth_transport_commit_mode(t,c,restart,1);
 }
 static inline int synth_transport_request_stop(SynthTransport *t,uint32_t id) {
  int i=synth_transport_find(t,id);

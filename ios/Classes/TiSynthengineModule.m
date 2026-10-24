@@ -1890,11 +1890,11 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
   if(!restart&&changes[@"timeUnit"]&&![changes[@"timeUnit"] isEqual:previous[@"timeUnit"]?:@"beats"])return @NO;
   NSMutableDictionary *merged=restart?[NSMutableDictionary dictionary]:[previous mutableCopy];[merged addEntriesFromDictionary:changes];
   if(!restart&&[changes[@"voice"] isKindOfClass:[NSDictionary class]])merged[@"voice"]=[TiSynthengineContract mergeSequenceVoice:previous[@"voice"]?:@{} changes:changes[@"voice"]];
-  SynthSequenceConfig *bank=synth_transport_begin_write(sequence,identifier,restart);
+  SynthSequenceConfig *bank=synth_transport_begin_write_full(sequence,identifier,restart);
   if(!bank){__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);__atomic_fetch_add(&rejectedPublications,1,__ATOMIC_RELAXED);return restart?@0:@NO;}
   NSDictionary *failure=[TiSynthengineContract prepareSequence:merged config:bank maxFrequency:[self maxFrequencyHz]];
   if(failure){synth_transport_cancel_write(sequence,bank);[self acceptValidation:failure method:restart?@"playSequence":@"updateSequence"];return restart?@0:@NO;}
-  if(!synth_transport_commit(sequence,bank,restart)){__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);__atomic_fetch_add(&rejectedPublications,1,__ATOMIC_RELAXED);return restart?@0:@NO;}
+  if(!synth_transport_commit_prepared(sequence,bank,restart)){__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);__atomic_fetch_add(&rejectedPublications,1,__ATOMIC_RELAXED);return restart?@0:@NO;}
   sequenceOptions[@(identifier)]=merged;if(restart)nextSequenceId=identifier;
   return restart?@(identifier):@YES;
  }

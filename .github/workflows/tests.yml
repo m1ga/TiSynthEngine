@@ -43,7 +43,7 @@ jobs:
         run: |
           cc -std=c11 -O2 -Wall -Wextra -Werror tests/sequence_core_regression.c -lm -o "$RUNNER_TEMP/sequence"
           "$RUNNER_TEMP/sequence"
-          for source in unified_sequence transport_core routing_core spatial_update multisequence_clock; do
+          for source in unified_sequence transport_core routing_core spatial_update multisequence_clock sequence_replacement; do
             cc -std=c11 -O2 -Wall -Wextra -Werror "tests/${source}_regression.c" -lm -o "$RUNNER_TEMP/$source"
             "$RUNNER_TEMP/$source"
           done
@@ -53,6 +53,8 @@ jobs:
           "$RUNNER_TEMP/modulation"
           c++ -std=c++17 -O2 -Wall -Wextra -Werror -pthread tests/transport_concurrency_regression.cpp -o "$RUNNER_TEMP/transport-concurrency"
           "$RUNNER_TEMP/transport-concurrency"
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror -pthread -DSYNTH_REPLACEMENT_PUBLICATION tests/transport_concurrency_regression.cpp -o "$RUNNER_TEMP/replacement-concurrency"
+          "$RUNNER_TEMP/replacement-concurrency"
 
       - name: Shared statistics tests
         run: |

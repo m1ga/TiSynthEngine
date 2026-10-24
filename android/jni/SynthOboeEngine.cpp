@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -351,7 +352,11 @@ public:
     if(size<9)return false;
     int count=(int)packet[0];if(count<1||count>512||size!=9+count*184)return false;
     std::lock_guard<std::mutex> guard(producerMutex_);
-    auto *c=synth_transport_begin_write(&transport_,id,restart);if(!c)return false;
+    auto *c=synth_transport_begin_write_full(&transport_,id,restart);if(!c)return false;
+    // The bridge supplies a complete score. Initialize only its live steps and
+    // header; the unused tail of a bank cannot affect preparation or playback.
+    memset(c->steps,0,(size_t)count*sizeof(c->steps[0]));
+    memset((char *)c+offsetof(SynthSequenceConfig,stepCount),0,sizeof(*c)-offsetof(SynthSequenceConfig,stepCount));
     c->stepCount=count;c->bpm=packet[1];c->swing=packet[2];c->loop=(int)packet[3];
     c->mode=(int)packet[4];c->tuning=packet[5];c->detune=packet[6];c->timeUnit=(int)packet[7];c->stepDuration=packet[8];
     for(int i=0;i<count;i++) {

@@ -80,16 +80,19 @@ static inline int synth_sequence_bank_index(const SynthSequenceTransport *t,cons
  for(int i=0;i<3;i++) if(c==&t->banks[i]) return i;
  return -1;
 }
-static inline SynthSequenceConfig *synth_sequence_begin_write(SynthSequenceTransport *t) {
+/* Reserve only; a full replacement producer must initialize every used field. */
+static inline SynthSequenceConfig *synth_sequence_reserve_write(SynthSequenceTransport *t) {
  for(int i=0;i<3;i++) {
   uint32_t freeState=0;
-  if(__atomic_compare_exchange_n(&t->bankState[i],&freeState,1,0,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED)) {
-   if(t->latest>=0) memcpy(&t->banks[i],&t->banks[t->latest],sizeof(t->banks[i]));
-   else synth_sequence_defaults(&t->banks[i]);
-   return &t->banks[i];
-  }
+  if(__atomic_compare_exchange_n(&t->bankState[i],&freeState,1,0,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED))return &t->banks[i];
  }
  return 0;
+}
+static inline SynthSequenceConfig *synth_sequence_begin_write(SynthSequenceTransport *t) {
+ SynthSequenceConfig *c=synth_sequence_reserve_write(t);if(!c)return 0;
+ if(t->latest>=0)memcpy(c,&t->banks[t->latest],sizeof(*c));
+ else synth_sequence_defaults(c);
+ return c;
 }
 static inline void synth_sequence_cancel_write(SynthSequenceTransport *t,SynthSequenceConfig *c) {
  int i=synth_sequence_bank_index(t,c);
@@ -125,9 +128,10 @@ static inline int synth_sequence_prepare(SynthSequenceConfig *c) {
  return 1;
 }
 /* Failed commits release the writer bank; acceptance precedes callback apply. */
-static inline int synth_sequence_commit(SynthSequenceTransport *t,SynthSequenceConfig *c,int restart) {
- int i=synth_sequence_bank_index(t,c);
- if(i<0||!synth_sequence_prepare(c)) {if(i>=0)synth_sequence_cancel_write(t,c);return 0;}
+/* Internal producer fast path: c must have just passed synth_sequence_prepare,
+ * without any subsequent structural mutation. Ownership/mailbox checks remain. */
+static inline int synth_sequence_commit_prepared(SynthSequenceTransport *t,SynthSequenceConfig *c,int restart) {
+ int i=synth_sequence_bank_index(t,c);if(i<0)return 0;
  if(!restart&&t->latest>=0&&c->timeUnit!=t->banks[t->latest].timeUnit) {synth_sequence_cancel_write(t,c);return 0;}
  /* Four samples at the fastest musical tempo leave at least one sample
   * after the largest swing displacement. Sub-sample scores cannot satisfy
@@ -143,6 +147,11 @@ static inline int synth_sequence_commit(SynthSequenceTransport *t,SynthSequenceC
   synth_sequence_cancel_write(t,c);return 0;
  }
  t->nextRevision=c->revision;t->latest=i;return 1;
+}
+static inline int synth_sequence_commit(SynthSequenceTransport *t,SynthSequenceConfig *c,int restart) {
+ if(synth_sequence_bank_index(t,c)<0)return 0;
+ if(!synth_sequence_prepare(c)){synth_sequence_cancel_write(t,c);return 0;}
+ return synth_sequence_commit_prepared(t,c,restart);
 }
 static inline void synth_sequence_request_stop(SynthSequenceTransport *t) {
  uint32_t serial=(__atomic_add_fetch(&t->controlSerial,1,__ATOMIC_RELAXED)&0x0fffffffu);
