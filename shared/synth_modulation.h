@@ -43,7 +43,9 @@ static inline void synth_modulation_init(SynthModulation *m,double sampleRate) {
     m->sineWeight[0]=m->sineWeight[1]=1;
 }
 static inline int synth_modulation_set_config(SynthModulation *m,const SynthModulationConfig *c,unsigned capabilities) {
-    if(!synth_modulation_validate(c,capabilities))return 0;m->config=*c;return 1;
+    if(!synth_modulation_validate(c,capabilities))return 0;
+    m->config=*c;
+    return 1;
 }
 static inline double synth_modulation_clamp(double x,double lo,double hi) {return fmin(hi,fmax(lo,x));}
 static inline double synth_modulation_approach(double a,double b,double d) {return a<b?fmin(a+d,b):fmax(a-d,b);}
