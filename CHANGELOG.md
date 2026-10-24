@@ -55,13 +55,13 @@ Beta for the planned first public release.
 ### Changed
 
 - Publish complete sequence scores without redundant bank copies on Android and iOS; reuse the iOS producer's validated preparation while retaining partial-edit and atomic rejection behavior.
-- Reduce Apple ARM64 Release binaural work by reusing FIR coefficients across eight consecutive samples. Preserve the original stereo loop, exact processing state and summation order, with stable-control and idle-effects fast paths. Own-renderer host measurements and physical acceptance limits are recorded in `documentation/performance-review.json`.
+- Retain the original Apple renderer after physical 32-stereo timing rejected the experimental eight-sample FIR/cache/idle-effects bundle. Exact compatibility, measured producer gains, rejected prototypes and physical acceptance limits are recorded in `documentation/performance-review.json`.
 
 ### Fixed
 
 - Avoid allocating empty Android sequence-end results and empty iOS metadata-pruning collections. Unknown iOS voice edits remain accepted no-ops without retaining per-ID spatial positions.
 
-- Reuse binaural FIR coefficients across eight consecutive samples on Android ARM64 while preserving sample results, sequence boundaries and release tails. The tested Sim80 headphone scene now reports zero output underruns and clean listening; this does not certify the separate maximum-load acceptance criteria.
+- Reuse binaural FIR coefficients across eight consecutive samples on Android ARM64 while preserving sample results, sequence boundaries and release tails. Extended Sim80 measurements retain near 60 FPS presentation but still record occasional output underruns in both reference and candidate; listening and maximum-load acceptance remain separate.
 - Preserve compatible released-key oscillator phases and pre-envelope filter history so repeated sustained notes do not cancel their tails; independent envelopes, gains and IDs remain unchanged.
 - Protect sustained attack and release edges shorter than 3 ms from hard gating on Android and iOS. Longer envelopes and existing timed envelopes retain their behavior.
 - Make the Android native limiter reach its target within the lookahead deadline, matching iOS and the Java DSP reference. Dense sums now respect the configured ceiling instead of escaping into hard clipping; drained-window gain resets without changing below-ceiling source gain.

@@ -234,7 +234,7 @@ clang -fobjc-arc -Wall -Wextra -framework Foundation \
 "$test_dir/contract_corpus_ios"
 ```
 
-The iOS renderer uses the same DSP header. Its output has no host-rendering test, so check it on a device.
+The iOS renderer uses the same DSP header. Its actual Objective-C render body has a host PCM/state comparison described below; device scheduling and audible output require separate checks.
 
 ## Binaural front-plane renderer
 
@@ -242,11 +242,13 @@ The iOS renderer uses the same DSP header. Its output has no host-rendering test
 
 Spatial voice-steal and stop tails copy the filter history as well as oscillator state. After the source envelope or fade ends, both ports drain the FIR with zero input for `taps - 1` samples before freeing the voice; this preserves even 1 ms events. Ordinary voices bypass the FIR. CPU cost grows with spatial voices, including short replacement tails. Spatial held updates prepare coefficients outside audio, then ramp the FIR over 10 ms while retaining history. The intended output-rate range is 8 to 192 kHz. Interpolated generic HRTFs provide directional cues, but localization varies by listener.
 
-Android ARM64 and Apple ARM64 size-optimized Release builds reuse coefficients across eight consecutive samples, with four-sample and streaming fallbacks for partial blocks and position ramps. Apple retains its original stereo loop; its other build modes retain streaming FIR. Each platform preserves its own reference's floating-point accumulation. Tiles stop before native sequence attacks and retain per-sample clocks, gates, phase, history and mixing order. This changes neither the output buffer nor lookahead latency.
+Android ARM64 reuses coefficients across eight consecutive samples, with four-sample and streaming fallbacks for partial blocks and position ramps. Tiles stop before native sequence attacks and retain per-sample clocks, gates, phase, history and mixing order. Apple retains its original streaming renderer. The proposed Apple adaptation was bit exact and faster in host/binaural tests but was removed after a reproducible physical stereo timing regression. Output buffers and lookahead latency are unchanged.
 
 ## Own-platform performance verification
 
-The [performance review](performance-review.json) separates measured host improvements, exact compatibility checks and pending device acceptance. Its [raw evidence](performance-review-evidence.zip) retains rejected prototypes and the investigation of idle/stereo regressions. The Apple FIR, stable-control cache and exact idle-effects bypass are one validated runtime change: accepting the FIR alone would retain the isolated regressions.
+The [performance review](performance-review.json) separates measured host improvements, exact compatibility checks and pending device acceptance. Its [raw evidence](performance-review-evidence.zip) retains rejected prototypes and the investigation of idle/stereo regressions. The Apple FIR, stable-control cache and exact idle-effects bypass were evaluated as one atomic candidate and then rejected after physical 32-stereo timing regressed. All three production changes were removed together; the full-score publication and control-memory fixes remain.
+
+Matched 48 kHz/1024-frame iPad full-load runs completed 600 audio seconds without callback deadline misses, with p95 load upper bounds 0.427 for the reference and 0.383 for the rejected initial candidate. The original Apple callback was restored because 32-stereo bypass p95 regressed reproducibly, including continuous-voice windows. Android Sim20/Sim80 frame presentation remains near 60 FPS, while occasional Sim80 output underruns persist in both versions. Compact 48 kHz iPad memory growth is about 18.2 MiB in both versions; no material RAM saving or physical 192 kHz acceptance is claimed. These results and qualified listening observations are recorded separately in the review.
 
 `tools/build_ios_render_host.py` compiles the actual Objective-C render-block body and voice/transport helpers on macOS. It replaces hardware/session/Titanium startup and fixes only the noise-seed/disabled-diagnostic clock. Output and semantic state are compared against a separately archived reference from the same platform. This is an Apple renderer test; it does not execute AVAudioEngine or establish iPad scheduling, route recovery, footprint or listening acceptance.
 
