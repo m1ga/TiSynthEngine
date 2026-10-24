@@ -160,7 +160,11 @@ for (const [method, validator] of [['start', 'Start'], ['playTone', 'Tone'],
   assert.deepStrictEqual(documentedKeys(table), nativeKeys(validator, 'options'), method + ' Java options')
   assert.deepStrictEqual(documentedKeys(table), nativeIosKeys(validator, 'options'), method + ' iOS options')
 }
-const defaultObject = apiDoc.split('The result has this shape:')[1].match(/```javascript\s*\n([\s\S]*?)```/)[1]
+const defaultsSection = apiDoc.split('## `getDefaults()`')[1].split('\n## ')[0]
+const defaultsExample = [...defaultsSection.matchAll(/```javascript\s*\n([\s\S]*?)```/g)]
+  .find(match => /^\s*\{/.test(match[1]))
+assert(defaultsExample, 'getDefaults documents its returned object')
+const defaultObject = defaultsExample[1]
 const reported = vm.runInNewContext('(' + defaultObject + ')')
 assert.deepStrictEqual(Object.keys(reported.defaults).sort(), [...nativeModule.matchAll(/defaults\.put\("(\w+)"/g)].map(m => m[1]).sort())
 const nativeConstants = new Map()
