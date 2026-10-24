@@ -1470,6 +1470,7 @@ extern "C" JNIEXPORT jboolean JNICALL Java_ti_synthengine_SynthThread_nativeSetT
 extern "C" JNIEXPORT jdoubleArray JNICALL Java_ti_synthengine_SynthThread_nativeSequenceEnds(JNIEnv *env,jclass,jlong handle) {
   double values[8];int count=0;SynthSequenceEnd end;
   while(count<8&&fromHandle(handle)->popSequenceEnd(&end)){values[count++]=end.sequenceId;values[count++]=end.reason;}
+  if(!count)return nullptr;
   auto result=env->NewDoubleArray(count);if(result&&count)env->SetDoubleArrayRegion(result,0,count,values);return result;
 }
 

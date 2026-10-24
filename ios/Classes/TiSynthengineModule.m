@@ -2247,6 +2247,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
 
 - (void)pruneVoiceMetadata
 {
+  if(voiceGenerations.count==0)return;
   NSMutableSet *retained=[NSMutableSet set];
   os_unfair_lock_lock(&commandProducerLock);
   uint32_t rd=atomic_load_explicit(&commandReadIndex,memory_order_acquire),wr=atomic_load_explicit(&commandWriteIndex,memory_order_acquire);
@@ -2404,7 +2405,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
     if(allowed>=0 && cmd.hasModulations && !synth_modulation_validate(&cmd.modulation,StudioModCapabilitiesFromMask(allowed)))return @NO;
     if(allowed>=0 && (cmd.liveMask & ~(uint32_t)allowed)){[self acceptValidation:@{@"key":@"changes",@"reason":@"incompatible_voice_source",@"value":raw} method:@"updateVoice"];return @NO;}
     BOOL full=[self enqueueCommand:cmd];if(full)__atomic_fetch_add(&statsRejected[2],1,__ATOMIC_RELAXED);
-    else if(cmd.hasSpatialUpdate)voicePositions[@(cmd.voiceId)]=@[@(cmd.spatialX),@(cmd.spatialY)];
+    else if(cmd.hasSpatialUpdate && cmd.voiceGeneration!=0)voicePositions[@(cmd.voiceId)]=@[@(cmd.spatialX),@(cmd.spatialY)];
     return full ? @NO : @YES;
   }
 }

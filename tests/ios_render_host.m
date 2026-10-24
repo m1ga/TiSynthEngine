@@ -178,10 +178,27 @@ static void producerBenchmark(int steps,int loops) {
  printf("{\"steps\":%d,\"loops\":%d,\"cpuSeconds\":%.9g,\"wallSeconds\":%.9g,\"cpuP95\":%.9g,\"wallP95\":%.9g,\"cpuMax\":%.9g,\"wallMax\":%.9g,\"peakRssBytes\":%ld,\"state\":\"%016llx\"}\n",steps,loops,ct,wt,cpu[(loops*95-1)/100],wall[(loops*95-1)/100],cpu[loops-1],wall[loops-1],usage.ru_maxrss,(unsigned long long)h);
  free(cpu);free(wall);destroyRig(r);
 }
-
+static void metadataRegression(void) {
+ RenderRig *r=rig(48000);float output[2];
+ for(int i=1;i<=1000;i++) {
+  assert(([[r updateVoice:@{@"voiceId":@(10000+i),@"spatialX":@.5}] boolValue]));
+  render(r,0,output,0);[r pruneVoiceMetadata];
+ }
+ assert(!r->voiceGenerations.count&&!r->voicePositions.count&&!r->voiceSpatialModes.count);
+ SynthCommand c=tone(r,0,0,YES,YES);assert(![r enqueueCommand:c]);
+ r->voiceGenerations[@1]=@1;r->voicePositions[@1]=@[@.6,@(-.4)];r->voiceSpatialModes[@1]=@YES;
+ [r pruneVoiceMetadata];assert(r->voiceGenerations.count==1);
+ assert(([[r updateVoice:@{@"voiceId":@1,@"spatialX":@.7}] boolValue]));
+ render(r,1,output,0);[r pruneVoiceMetadata];assert(r->voiceGenerations.count==1);
+ assert([r->voicePositions[@1][0] doubleValue]==.7);
+ [r fadeOutAllVoices];[r pruneVoiceMetadata];
+ assert(!r->voiceGenerations.count&&!r->voicePositions.count&&!r->voiceSpatialModes.count);
+ destroyRig(r);puts("Apple voice metadata: unknown edits retain nothing, queued/active owners survive, retired owner reclaimed PASS");
+}
 int main(int argc,char **argv) {@autoreleasepool {
  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE,0);
  if(argc>1&&!strcmp(argv[1],"--trace")){traceBytes=YES;fixtures();}
+ else if(argc>1&&!strcmp(argv[1],"--metadata"))metadataRegression();
  else if(argc>1&&atoi(argv[1])==-1)pruneBenchmark(argc>2?atoi(argv[2]):100000);
  else if(argc>1&&atoi(argv[1])==-2)producerBenchmark(argc>2?atoi(argv[2]):1,argc>3?atoi(argv[3]):100);
  else if(argc>1)benchmark(atoi(argv[1]),argc>2?atoi(argv[2]):2000);else fixtures();
