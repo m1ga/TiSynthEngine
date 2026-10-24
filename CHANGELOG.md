@@ -1,8 +1,8 @@
 # Changelog
 
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-10-24
 
-Beta for the planned first public release.
+Initial official release. The earlier private snapshot and all subsequent changes belong to pre-release development.
 
 ### Added
 
@@ -13,7 +13,7 @@ Beta for the planned first public release.
 - Add two optional phase-preserving native LFOs on sustained/sequence voices, with filter, PWM and FM targets and free/tempo-sync rates.
 - Add accumulated `preLimiterPeakDb` and `maxLimiterReductionDb` diagnostics. Studio preset calibration and listening acceptance are reported separately from module capabilities.
 
-- Add matching `noteOn`, `noteOff` and `updateVoice` APIs for native sustained notes, current-level release and 10 ms live parameter ramps. Preserve timed calls and beta 1.0.0; detect methods by capability.
+- Add matching `noteOn`, `noteOff` and `updateVoice` APIs for native sustained notes, current-level release and 10 ms live parameter ramps. Retain the timed playback methods alongside the identified sustained-voice API.
 
 - Complete the interactive example with nine headphone positions, stereo comparison, spatial chords/patterns, audio-session selection and statistics read/reset/diagnostic controls.
 - Handle playback rejection consistently in example actions and respect window safe areas; document setup, device checks, scheduler completion exceptions, statistics cleanup and idle render load.

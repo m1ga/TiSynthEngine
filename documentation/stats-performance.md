@@ -2,7 +2,7 @@
 
 ## Unified transport validation
 
-The unified transport, selective processing and continuous voice controls are implemented in beta 1.0.0. Both native modules were rebuilt with Titanium SDK 13.4.1.GA. Fresh Android libraries for four ABIs and the three Apple XCFramework libraries were compared with the packaged binaries. The eight consumer applications and the module example use the final API; consumer application builds and physical playback are checked separately below.
+The unified transport, selective processing and continuous voice controls are implemented in 1.0.0. The following evidence was collected during pre-release development. Both native modules were rebuilt with Titanium SDK 13.4.1.GA. Fresh Android libraries for four ABIs and the three Apple XCFramework libraries were compared with the packaged binaries. The eight consumer applications and the module example use the final API; consumer application builds and physical playback are checked separately below.
 
 [Unified validation evidence](unified-validation.json) records native binary hashes, contract and regression results, the five-rate ten-minute simulated transport clock test, consumer checks and remaining acceptance work. Nine reference renders and thirty rate/wave cases match the archived renderer sample for sample with the new functions inactive. The effects history optimization also preserves its five-rate render hashes.
 

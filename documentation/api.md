@@ -4,7 +4,7 @@ Module id: `ti.synthengine`
 
 Public API version: `1.0.0`
 
-Android and iOS expose the same nineteen methods, one event and waveform values. Option objects are strict: an unknown key is rejected with `unsupported_option`. Reported beta metadata and rejection diagnostics have platform differences; this reference does not promise sample-identical rendering between Android and iOS.
+Android and iOS expose the same nineteen methods, one event and waveform values. Option objects are strict: an unknown key is rejected with `unsupported_option`. Reported metadata and rejection diagnostics have platform differences; this reference does not promise sample-identical rendering between Android and iOS.
 
 ## Return values
 
@@ -20,7 +20,7 @@ Returns the installed contract without starting the audio stream.
 var contract = synth.getDefaults()
 ```
 
-The shared result has this shape; Android adds the beta metadata described below:
+The shared result has this shape; Android adds the platform metadata described below:
 
 ```javascript
 {
@@ -147,7 +147,7 @@ On iOS, `playback` ignores the silent switch and interrupts other apps' audio. `
 
 ## `noteOn(options)`
 
-Starts a sustained native voice. Detect `typeof synth.noteOn === 'function'`, `noteOff` and `updateVoice` before using these beta capabilities; `apiVersion` remains `1.0.0`. There is no duration limit and no JavaScript timer holds the note.
+Starts a sustained native voice. Detect `typeof synth.noteOn === 'function'`, `noteOff` and `updateVoice` before enabling their controls; `apiVersion` is `1.0.0`. There is no duration limit and no JavaScript timer holds the note.
 
 | Field | Rule |
 | --- | --- |
@@ -553,7 +553,7 @@ Listen with stereo headphones. Height perception depends on the listener, headph
 
 ## `getStats()`
 
-Older beta 1.0.0 packages may lack these methods; use `typeof synth.getStats === 'function'` for feature detection when supporting earlier beta installations.
+Use `typeof synth.getStats === 'function'` to check that the expected module is installed before enabling a diagnostics panel.
 
 Returns a new snapshot without resetting counters. Available before start and after shutdown. Occupancy is the last completed render block; queued commands are read at query time. No audio-thread allocation, locks or waiting are added.
 

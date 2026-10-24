@@ -2,7 +2,7 @@
 
 Every snippet on this page uses the TiSynthEngine 1.0.0 contract. Unless a snippet includes startup code, it assumes the engine is already running.
 
-For the newer beta capabilities, begin with [held motors](#sustained-game-motor), [native sequences](#native-sequence-with-chords-and-edits), [master processing](#chorus-delay-reverb-and-creative-saturation) or [two LFOs](#two-voice-lfos). Detect methods before use; the version string alone cannot identify an installed beta build.
+For interactive instruments and native processing, begin with [held motors](#sustained-game-motor), [native sequences](#native-sequence-with-chords-and-edits), [master processing](#chorus-delay-reverb-and-creative-saturation) or [two LFOs](#two-voice-lfos). Use matching official packages and check method availability before enabling a feature.
 
 ```javascript
 var synth = require('ti.synthengine')
@@ -563,7 +563,7 @@ Assume one running engine owned by this service. The positive voice ID belongs t
 ```javascript
 if (!['noteOn', 'noteOff', 'updateVoice'].every(function (name) {
   return typeof synth[name] === 'function'
-})) throw new Error('Current held-voice beta APIs are required')
+})) throw new Error('Held-voice APIs are required')
 
 var nextMotorId = 1
 var motorId = null
@@ -652,7 +652,7 @@ This configures the selected share of a running engine; `applyTo` defaults to al
 
 ```javascript
 if (typeof synth.setMasterProcessing !== 'function') {
-  throw new Error('Current master-processing beta API is required')
+  throw new Error('Master-processing API is required')
 }
 if (!synth.setMasterProcessing({
   inputGain: 0.7,
@@ -685,7 +685,7 @@ This square voice modulates cutoff and PWM independently. The original `lfoFreq`
 
 ```javascript
 if (typeof synth.noteOn !== 'function' || typeof synth.updateVoice !== 'function') {
-  throw new Error('Current held-voice beta APIs are required')
+  throw new Error('Held-voice APIs are required')
 }
 var modulatedId = 100001 // Reserve an unused ID from the owner's counter in an app.
 if (!synth.noteOn({ voiceId: modulatedId, note: 'A3', waveType: WAVE.SQUARE,
@@ -727,4 +727,4 @@ function closeMixMeter () {
 }
 ```
 
-Call `closeMixMeter` when its owner hides or closes. The new fields may be absent on older beta packages; display that as unavailable. Reset deliberately before a comparison. These values measure digital peak protection, not speaker loudness, subjective quality or a guarantee that every audio deadline was met.
+Call `closeMixMeter` when its owner hides or closes. Display unavailable or unmeasured fields as unavailable. Reset deliberately before a comparison. These values measure digital peak protection, not speaker loudness, subjective quality or a guarantee that every audio deadline was met.

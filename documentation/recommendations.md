@@ -109,7 +109,7 @@ Use the [integration guide](guide.md#integrate-binaural-in-a-2d-app) to convert 
 
 ## Known limits
 
-- Use `noteOn` with app-supplied IDs for individual release and compatible live updates. Detect the methods in beta binaries; timed events do not return voice handles.
+- Use `noteOn` with app-supplied IDs for individual release and compatible live updates. Check the required methods before enabling controls; timed events do not return voice handles.
 - Timed tones, chords and pattern steps last at most 60 seconds. Sustained `noteOn` voices last until release, replacement or shutdown.
 - The module synthesizes waveforms and does not play audio files.
 - One native transport supports up to four independent sequences, preallocated by `maxSequences`. All share at most 32 voices.

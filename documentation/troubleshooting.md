@@ -61,7 +61,7 @@ modules/android/ti.synthengine/1.0.0/
 modules/iphone/ti.synthengine/1.0.0/
 ```
 
-For binaural, also inspect `getDefaults().limits.spatialX` and `.spatialY`. During the unreleased beta, two binaries can both report 1.0.0 while only one includes positioning. Copying the package does not update an already installed app: rebuild and reinstall it.
+For binaural, also inspect `getDefaults().limits.spatialX` and `.spatialY`. Use the official packages to avoid stale development binaries. Copying the package does not update an already installed app: rebuild and reinstall it.
 
 ## Binaural does not change the position
 
@@ -170,7 +170,7 @@ Include the platform, OS version, device model, Titanium SDK version, module ver
 
 ## Held notes, sequences or effects methods are missing
 
-The beta remains API version 1.0.0. Detect `noteOn`/`noteOff`/`updateVoice`, all four sequence methods and `setMasterProcessing` according to the feature needed. Install matching current Android/iOS packages, rebuild and reinstall the consumer app. Existing binary packages can share the same version without the same methods or accepted fields. See [capability detection](guide.md#detect-optional-beta-capabilities).
+The official release reports API version 1.0.0. Detect `noteOn`/`noteOff`/`updateVoice`, all four sequence methods and `setMasterProcessing` according to the feature needed. Install matching current Android/iOS packages, rebuild and reinstall the consumer app. A stale development binary may report the same version without the complete release API. See [capability detection](guide.md#detect-required-capabilities).
 
 ## A held voice does not release or update
 

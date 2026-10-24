@@ -4,7 +4,7 @@ Install TiSynthEngine, start it after layout settles, and release its native aud
 
 ## Install the module
 
-For the unreleased beta, use the packages built from the current module source in `android/dist` and `ios/dist`. The [latest release](https://github.com/macCesar/TiSynthEngine/releases/latest) is a separate package snapshot; it does not update when source files change. The archive names are:
+Download both official packages from [Android 1.0.0](https://github.com/macCesar/TiSynthEngine/releases/tag/android-1.0.0) and [iOS 1.0.0](https://github.com/macCesar/TiSynthEngine/releases/tag/ios-1.0.0). For source builds, the matching archives are produced under `android/dist` and `ios/dist`:
 
 - `ti.synthengine-android-1.0.0.zip`
 - `ti.synthengine-iphone-1.0.0.zip`
@@ -22,7 +22,7 @@ TiSynthEngine requires Titanium SDK 13.2.0.GA or newer. Android projects must co
 
 ## Load and verify the contract
 
-Require the module once in the code that owns audio. Check `apiVersion` before starting. During development, different beta binaries can report the same version; also check the [spatial limits](#detect-the-installed-feature) and [statistics methods](#read-engine-statistics) if the app needs those features. Check [optional beta capabilities](#detect-optional-beta-capabilities) for held voices, musical transport and master processing.
+Require the module once in the code that owns audio. Check `apiVersion` before starting. Also check the [spatial limits](#detect-the-installed-feature) and [statistics methods](#read-engine-statistics) if the app needs those features. Check [required capabilities](#detect-required-capabilities) for held voices, musical transport and master processing.
 
 ```javascript
 var synth = require('ti.synthengine')
@@ -81,9 +81,9 @@ win.open()
 
 Use one owner for the engine. Start it once, pass a small audio service to the screens that need it, and call `shutdown()` from the owner. While the engine is running, another valid `start()` call returns `true` and leaves the existing options in effect. Changing voice capacity, profile or session policy requires `shutdown()` and a new start. This example selects `ambient` for game/UI audio; the default remains `playback`. Android validates the session policy and leaves output unchanged.
 
-## Detect optional beta capabilities
+## Detect required capabilities
 
-The current beta adds held voices, sample-clock sequences, stereo effects and two optional LFOs while retaining API version 1.0.0. Require the methods used by each feature instead of enabling everything from the version string:
+Release 1.0.0 includes held voices, sample-clock sequences, stereo effects and two optional LFOs. Require the methods used by each feature before enabling its controls:
 
 ```javascript
 function hasMethods (names) {
@@ -94,7 +94,7 @@ var supportsSequence = hasMethods(['playSequence', 'updateSequence', 'stopSequen
 var supportsProcessing = hasMethods(['setMasterProcessing'])
 ```
 
-Start the engine successfully before publishing held notes, sequence edits or processing. `getDefaults` and feature checks do not open the stream. Install matching packages for Android/iOS and rebuild the application when replacing a native beta. Additional LFOs require a binary implementing the current modulation contract; method presence alone cannot distinguish every intermediate beta field. Treat rejected configurations as unavailable rather than silently dropping their keys.
+Start the engine successfully before publishing held notes, sequence edits or processing. `getDefaults` and feature checks do not open the stream. Install matching packages for Android/iOS and rebuild the application when replacing a native module. Additional LFOs require the documented modulation contract; check acceptance of the complete configuration. Treat rejected configurations as unavailable rather than silently dropping their keys.
 
 ## Hold and edit a voice
 
@@ -381,7 +381,7 @@ Keep the synthesis recipe (pitch, waveform, duration, envelope, filters, FM and 
 
 ### Detect the installed feature
 
-During the unreleased 1.0.0 beta, the version string alone does not prove that an installed binary has binaural support. Check both coordinate limits before enabling the controls:
+Check both coordinate limits before enabling binaural controls to verify that the app loaded the expected native module:
 
 ```javascript
 var synth = require('ti.synthengine')

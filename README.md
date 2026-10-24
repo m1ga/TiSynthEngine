@@ -2,7 +2,7 @@
 
 TiSynthEngine is a native synthesizer for Titanium apps on Android and iOS. It generates tones, sustained voices, chords, sweeps, noise and sample-clock sequences without bundled audio files. Optional native chorus, ping-pong delay, reverb, creative saturation and two voice LFOs add movement and space. Optional `spatialX` and `spatialY` provide headphone positioning on a front plane; see [binaural positioning](documentation/api.md#binaural-front-plane-positioning) and [app integration](documentation/guide.md#integrate-binaural-in-a-2d-app).
 
-The module id is `ti.synthengine`. API version `1.0.0` is an unreleased beta for the first public release.
+The module id is `ti.synthengine`. Version `1.0.0` is the initial official release for Android and iOS.
 
 ## What it is for
 
@@ -35,7 +35,7 @@ The [documentation index](documentation/index.md) connects all guides. Start wit
 
 ## Install
 
-For the unreleased beta, use both packages built from the current source in `android/dist` and `ios/dist`, then copy them into the Titanium app root. The [latest release](https://github.com/macCesar/TiSynthEngine/releases/latest) is a separate snapshot; copying new source does not update its packages:
+Download the platform-specific packages from [Android 1.0.0](https://github.com/macCesar/TiSynthEngine/releases/tag/android-1.0.0) and [iOS 1.0.0](https://github.com/macCesar/TiSynthEngine/releases/tag/ios-1.0.0), then copy both archives into the Titanium app root:
 
 - `ti.synthengine-android-1.0.0.zip`
 - `ti.synthengine-iphone-1.0.0.zip`
@@ -115,7 +115,7 @@ Apps that start ads, remote configuration or entry animations may need a longer 
 
 ## Public methods
 
-Native sample-clock sequencing, stereo chorus/delay/reverb and optional creative saturation are available through capability-detected beta APIs. New processing starts disabled. See the [transport and processing contract](documentation/api.md#native-sequence-transport).
+Native sample-clock sequencing, stereo chorus/delay/reverb and optional creative saturation are available through the native APIs. New processing starts disabled. See the [transport and processing contract](documentation/api.md#native-sequence-transport).
 
 The module exposes nineteen methods and one event, `sequenceend`.
 
@@ -153,14 +153,14 @@ Boolean methods return `true` when accepted. A `false` result means the payload 
 | `modulations` on held/sequence voices | Up to two sine/triangle LFOs for filter cutoff, square PWM or sine FM, with free or tempo-synced rates. | [LFO example](documentation/examples.md#two-voice-lfos) |
 | Accumulated signal diagnostics | See brief pre-limiter peaks and limiter attenuation that happened between UI polls. | [Measure the mix](documentation/examples.md#measure-peaks-and-limiter-reduction) |
 
-Beta packages retain `apiVersion: '1.0.0'`: detect the methods you need and rebuild the app with matching Android/iOS packages. The [guide](documentation/guide.md#detect-optional-beta-capabilities) shows feature detection. Timed playback remains available through its existing methods.
+The release reports `apiVersion: '1.0.0'`. Detect the methods you need and rebuild the app with matching official Android/iOS packages. The [guide](documentation/guide.md#detect-required-capabilities) shows feature detection. Timed playback remains available through its existing methods.
 
 The initial module state is `inputGain: 1`, all four master processors disabled and no additional voice LFOs. Turning an effect on is explicit; these features are available to every Titanium consumer, including games. Select processed categories with `applyTo`; an explicit per-voice `effectSend` overrides category selection. Music, effects, UI and ambience share one effects chain and one final limiter. Turning them off drains their tails; `stopAll()` performs panic and clears effect histories. Saturation changes timbre and remains separate from final limiter protection.
 
 ```javascript
 if (typeof synth.playSequence !== 'function' ||
     typeof synth.setMasterProcessing !== 'function') {
-  throw new Error('Install current TiSynthEngine beta packages and rebuild')
+  throw new Error('Install the official TiSynthEngine packages and rebuild')
 }
 if (!synth.setMasterProcessing({ reverb: { enabled: true, decay: 1.1, mix: 0.12 } })) {
   throw new Error('Reverb configuration rejected')
@@ -452,7 +452,7 @@ Connecting or disconnecting an output may cut the note crossing the hardware tra
 
 ## Validation and performance
 
-The current beta has real Android builds for all four listed ABIs and Apple builds for device, simulator and Catalyst. The own-Apple renderer was compared byte-for-byte with its frozen reference across 120 scenarios, five sample rates from 16 to 192 kHz, and short, irregular and 1024-frame blocks. Audio and original semantic state matched. These Apple results compare the Apple renderer with its own reference; they do not claim sample equality between Android and iOS.
+Release 1.0.0 has real Android builds for all four listed ABIs and Apple builds for device, simulator and Catalyst. The own-Apple renderer was compared byte-for-byte with its frozen reference across 120 scenarios, five sample rates from 16 to 192 kHz, and short, irregular and 1024-frame blocks. Audio and original semantic state matched. These Apple results compare the Apple renderer with its own reference; they do not claim sample equality between Android and iOS.
 
 Full-score publication and control-memory improvements are retained. The experimental Apple FIR/cache/idle-effects bundle was removed after physical 32-voice stereo timing regressed. Production iOS retains its original renderer. No buffer increase, added latency or reduction in voices, effects or quality was used to improve a result.
 
