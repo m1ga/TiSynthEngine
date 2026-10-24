@@ -9,9 +9,14 @@ int main(void) {
  synth_effects_set_config(&fx,&c);
  SynthSend send;synth_send_init(&send,SYNTH_BUS_EFFECTS,-1,c.applyToMask);assert(synth_send_tick(&send)==0);
  synth_send_update(&send,SYNTH_BUS_EFFECTS,.25,c.applyToMask,480);
- for(int i=0;i<240;i++)synth_send_tick(&send);
+ for(int i=0;i<240;i++) {
+  synth_send_tick(&send);
+ }
  assert(fabs(send.value-.125)<1e-12);
- for(int i=0;i<240;i++)synth_send_tick(&send);assert(send.value==.25);
+ for(int i=0;i<240;i++) {
+  synth_send_tick(&send);
+ }
+ assert(send.value==.25);
  double l,r;
  for(int i=0;i<500;i++)synth_effects_process_routed(&fx,120,.1,-.1,.3,.3,1,&l,&r);
  double expected=tanh(1.2)/tanh(4);
