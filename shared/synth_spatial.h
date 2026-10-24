@@ -7,14 +7,7 @@
 #include <math.h>
 #include <string.h>
 #include "synth_hrtf_data.h"
-/* Apple size-optimized Release builds use fused per-lane accumulation.
- * Other Apple build modes retain the original streaming implementation. */
-#if defined(__aarch64__) && (defined(__ANDROID__) || (defined(__APPLE__) && defined(__OPTIMIZE_SIZE__)))
-#define SYNTH_SPATIAL_TIME_BLOCKS 1
-#else
-#define SYNTH_SPATIAL_TIME_BLOCKS 0
-#endif
-#if SYNTH_SPATIAL_TIME_BLOCKS
+#if defined(__ANDROID__) && defined(__aarch64__)
 #include <arm_neon.h>
 #endif
 #define SYNTH_SPATIAL_MAX_TAPS 640
@@ -84,12 +77,7 @@ static inline void synth_spatial_process(SynthSpatial *s,float input,float *left
      * Explicit lanes avoid the extracted-lane reductions and register spills.
      */
     float32x4_t l=vdupq_n_f32(0),r=vdupq_n_f32(0);
-    int i=0;
-#if defined(__ANDROID__)
- int aligned=s->taps&~31;
-#else
- int aligned=0;
-#endif
+    int i=0,aligned=s->taps&~31;
     for(;i<aligned;i+=4) {
       float32x4_t input4=vld1q_f32(h+i);
       l=vaddq_f32(l,vmulq_f32(input4,vld1q_f32(s->left+i)));
@@ -117,7 +105,7 @@ static inline void synth_spatial_process(SynthSpatial *s,float input,float *left
 /* Process consecutive samples with the original per-sample partial sums.
  * Reuse coefficients without changing multiplication/addition order.
  * Input and output arrays must be disjoint. */
-#if SYNTH_SPATIAL_TIME_BLOCKS
+#if defined(__ANDROID__) && defined(__aarch64__)
 static inline float synth_spatial_reduce_four(float32x4_t v) {
  return (vgetq_lane_f32(v,0)+vgetq_lane_f32(v,1))+(vgetq_lane_f32(v,2)+vgetq_lane_f32(v,3));
 }
@@ -128,12 +116,7 @@ static inline void synth_spatial_process_four(SynthSpatial *s,const float *input
  memcpy(h+4,s->history+s->position+1,(s->taps-1)*sizeof(float));
  for(int f=0;f<4;f++)h[3-f]=input[f];
  float32x4_t l0=vdupq_n_f32(0),l1=l0,l2=l0,l3=l0,r0=l0,r1=l0,r2=l0,r3=l0;
- int i=0;
-#if defined(__ANDROID__)
- int aligned=s->taps&~31;
-#else
- int aligned=0;
-#endif
+ int i=0,aligned=s->taps&~31;
  {
 #pragma clang fp contract(off)
  for(;i<aligned;i+=4){
@@ -163,12 +146,7 @@ static inline void synth_spatial_process_eight(SynthSpatial *s,const float *inpu
  memcpy(h+8,s->history+s->position+1,(s->taps-1)*sizeof(float));
  for(int f=0;f<8;f++)h[7-f]=input[f];
  float32x4_t l0=vdupq_n_f32(0),l1=vdupq_n_f32(0),l2=vdupq_n_f32(0),l3=vdupq_n_f32(0),l4=vdupq_n_f32(0),l5=vdupq_n_f32(0),l6=vdupq_n_f32(0),l7=vdupq_n_f32(0),r0=vdupq_n_f32(0),r1=vdupq_n_f32(0),r2=vdupq_n_f32(0),r3=vdupq_n_f32(0),r4=vdupq_n_f32(0),r5=vdupq_n_f32(0),r6=vdupq_n_f32(0),r7=vdupq_n_f32(0);
- int i=0;
-#if defined(__ANDROID__)
- int aligned=s->taps&~31;
-#else
- int aligned=0;
-#endif
+ int i=0,aligned=s->taps&~31;
  {
 #pragma clang fp contract(off)
  for(;i<aligned;i+=4){
@@ -223,7 +201,7 @@ static inline void synth_spatial_process_eight(SynthSpatial *s,const float *inpu
 #endif
 static inline void synth_spatial_process_block(SynthSpatial *s,const float *input,float *left,float *right,int frames) {
  int i=0;
-#if SYNTH_SPATIAL_TIME_BLOCKS
+#if defined(__ANDROID__) && defined(__aarch64__)
  for(;i+7<frames;i+=8)synth_spatial_process_eight(s,input+i,left+i,right+i);
  for(;i+3<frames;i+=4)synth_spatial_process_four(s,input+i,left+i,right+i);
 #endif

@@ -89,7 +89,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Apple Release FIR state regression
+      - name: Apple spatial state regression
         run: |
           clang -std=c99 -Os -Wall -Wextra -Wpedantic tests/spatial_regression.c -lm -o "$RUNNER_TEMP/apple-spatial"
           "$RUNNER_TEMP/apple-spatial"
