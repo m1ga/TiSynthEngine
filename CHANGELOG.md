@@ -52,7 +52,14 @@ Beta for the planned first public release.
 - The envelope, filter, sweep, FM and cents math live once in `shared/synth_core.h`, which both renderers include. Host checks cover that core, the Android engine render path and a replayed contract corpus for the iOS contract.
 - Requires Titanium SDK 13.2.0.GA or newer and iOS 15 or newer.
 
+### Changed
+
+- Publish complete sequence scores without redundant bank copies on Android and iOS; reuse the iOS producer's validated preparation while retaining partial-edit and atomic rejection behavior.
+- Reduce Apple ARM64 Release binaural work by reusing FIR coefficients across eight consecutive samples. Preserve the original stereo loop, exact processing state and summation order, with stable-control and idle-effects fast paths. Own-renderer host measurements and physical acceptance limits are recorded in `documentation/performance-review.json`.
+
 ### Fixed
+
+- Avoid allocating empty Android sequence-end results and empty iOS metadata-pruning collections. Unknown iOS voice edits remain accepted no-ops without retaining per-ID spatial positions.
 
 - Reuse binaural FIR coefficients across eight consecutive samples on Android ARM64 while preserving sample results, sequence boundaries and release tails. The tested Sim80 headphone scene now reports zero output underruns and clean listening; this does not certify the separate maximum-load acceptance criteria.
 - Preserve compatible released-key oscillator phases and pre-envelope filter history so repeated sustained notes do not cancel their tails; independent envelopes, gains and IDs remain unchanged.

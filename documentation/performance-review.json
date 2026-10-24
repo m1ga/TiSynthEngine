@@ -1,0 +1,1745 @@
+{
+  "generatedAt": "2026-10-24T02:03:37.346010+00:00",
+  "baselineRevision": "7ab31107302d9b7027a6359ba1a6fdb49c250407",
+  "apiVersion": "1.0.0",
+  "stage": "offline implementation and verification complete; physical acceptance pending",
+  "sourceSha256": {
+    "android/jni/SynthOboeEngine.cpp": "d4a044949b9c1bbc54d023ddd70ec979572617448f317e1866598439818a602e",
+    "ios/Classes/TiSynthengineModule.m": "e04f64e6b4cac6a1f1581019343924f03957c5483cf7f6f0b87a77fdbd845ef6",
+    "shared/synth_sequence.h": "0730d785465b8dae87fc748b6f9126306735fe37f5b73271337f907e3ddb129f",
+    "shared/synth_transport.h": "c40f576861450ed1347a307422d76335dcd83d1f7a8b251f61898a29d25ab68e",
+    "shared/synth_spatial.h": "f207327bc3671b8ff56670208835e5419e742c5c0c453d57b8456f1cee0e33e3"
+  },
+  "candidateCodeRevision": "f6f107cef618dab1d3c9f513667ad7df9d059ac6",
+  "postTimingNormalization": "Two whitespace-only generated lines were normalized after timing. The non-whitespace source token sequence is unchanged; production builds use the listed final source hashes.",
+  "constraints": {
+    "publicMethods": 19,
+    "maxVoices": 32,
+    "maxSequences": 4,
+    "sequenceBanksPerSlot": 3,
+    "maxSteps": 512,
+    "bufferSizeChanged": false,
+    "latencyAdded": false,
+    "qualityReduced": false,
+    "dependenciesChanged": false,
+    "productionCompilerFlagsChanged": false,
+    "consumersInstalled": false,
+    "devicesAccessed": false,
+    "pushOrReleasePublished": false
+  },
+  "acceptance": {
+    "ownAppleRendererCompared": true,
+    "byteExact": true,
+    "comparedTraceBytes": 27044316974,
+    "scenarios": 120,
+    "engineRatesHz": [
+      16000,
+      44100,
+      48000,
+      96000,
+      192000
+    ],
+    "firStandaloneAlsoCovers8000Hz": true,
+    "fixtureBlockFrames": [
+      0,
+      1,
+      3,
+      4,
+      7,
+      8,
+      9,
+      15,
+      16,
+      17,
+      23,
+      31,
+      256
+    ],
+    "traceScope": "PCM from every fixture block; full original voice/tail, filter/FIR, limiter buffers and dynamics, effects buffers/configuration and transport state at fixture checkpoints. Pointers and optional diagnostic timing are excluded.",
+    "negativeControl": "A changed phase increment failed comparison. Android empty-JNI result and Apple unknown-ID metadata tests failed against baseline and passed after correction.",
+    "finalRenderAlarmsClear": true,
+    "atomicAppleRuntimeBundle": [
+      "F02",
+      "F03",
+      "F04"
+    ],
+    "firAloneAccepted": false,
+    "physicalAcceptance": false,
+    "globalAcceptance": false
+  },
+  "performance": {
+    "platform": "ARM64 macOS host; actual Apple Objective-C renderer and producer. This is not an iPad real-time or whole-app CPU measurement.",
+    "compiler": "Apple clang 21.0.0; Apple C99 -Os; Android JNI host probe C++17 -O3; production module builds retain their original options.",
+    "renderConditions": "48kHz, 256-frame callbacks, diagnostics off, fixed identical per-case warmups, user-interactive QoS request without CPU affinity guarantee; ten alternating measured pairs after a discarded pair; independent thread CPU/monotonic wall clocks. No compilers or other suites ran during timing.",
+    "alarmThresholdsPercent": {
+      "total": 2,
+      "p95": 5
+    },
+    "render": [
+      {
+        "scenario": "silence",
+        "changePercent": {
+          "wallSeconds": -32.20737576741877,
+          "cpuSeconds": -29.51357194867541,
+          "wallP95": -33.333333222223075,
+          "cpuP95": -29.82267598065558,
+          "wallMax": -79.31027914563276,
+          "cpuMax": -63.93448275862069,
+          "peakRssBytes": 0.0
+        },
+        "median": {
+          "baseline": {
+            "wallSeconds": 0.0025459998849999997,
+            "cpuSeconds": 0.002686276,
+            "wallP95": 3.00002284e-06,
+            "cpuP95": 2.7915000000000003e-06,
+            "wallMax": 2.8999988e-05,
+            "cpuMax": 1.45e-05,
+            "peakRssBytes": 15925248.0
+          },
+          "candidate": {
+            "wallSeconds": 0.001726000135,
+            "cpuSeconds": 0.00189346,
+            "wallP95": 2.00001523e-06,
+            "cpuP95": 1.959e-06,
+            "wallMax": 6.000016565e-06,
+            "cpuMax": 5.2295e-06,
+            "peakRssBytes": 15925248.0
+          }
+        },
+        "investigationAlarm": false
+      },
+      {
+        "scenario": "oneHeldStereo",
+        "changePercent": {
+          "wallSeconds": -5.810995956134257,
+          "cpuSeconds": -6.187380602852677,
+          "wallP95": -8.333373610999683,
+          "cpuP95": -6.870325770059582,
+          "wallMax": 21.176507579261038,
+          "cpuMax": 19.515000000000015,
+          "peakRssBytes": 0.0
+        },
+        "median": {
+          "baseline": {
+            "wallSeconds": 0.0112114998,
+            "cpuSeconds": 0.0113217215,
+            "wallP95": 1.20000332e-05,
+            "cpuP95": 1.1833500000000001e-05,
+            "wallMax": 4.24999744e-05,
+            "cpuMax": 2.9999999999999997e-05,
+            "peakRssBytes": 15958016.0
+          },
+          "candidate": {
+            "wallSeconds": 0.01056,
+            "cpuSeconds": 0.010621203499999999,
+            "wallP95": 1.10000256e-05,
+            "cpuP95": 1.10205e-05,
+            "wallMax": 5.14999847e-05,
+            "cpuMax": 3.58545e-05,
+            "peakRssBytes": 15958016.0
+          }
+        },
+        "investigationAlarm": false
+      },
+      {
+        "scenario": "oneHeldBinaural",
+        "changePercent": {
+          "wallSeconds": -60.119999369936835,
+          "cpuSeconds": -59.68433390269574,
+          "wallP95": -59.99995352002918,
+          "cpuP95": -59.734346105665026,
+          "wallMax": -48.484866346801844,
+          "cpuMax": -45.48897707896366,
+          "peakRssBytes": 0.10256410256410664
+        },
+        "median": {
+          "baseline": {
+            "wallSeconds": 0.0237499997,
+            "cpuSeconds": 0.023762545500000003,
+            "wallP95": 2.50000157e-05,
+            "cpuP95": 2.51455e-05,
+            "wallMax": 9.899999725e-05,
+            "cpuMax": 6.6271e-05,
+            "peakRssBytes": 15974400.0
+          },
+          "candidate": {
+            "wallSeconds": 0.00947150003,
+            "cpuSeconds": 0.0095800285,
+            "wallP95": 1.00000179e-05,
+            "cpuP95": 1.0125e-05,
+            "wallMax": 5.0999980899999996e-05,
+            "cpuMax": 3.6125e-05,
+            "peakRssBytes": 15990784.0
+          }
+        },
+        "investigationAlarm": false
+      },
+      {
+        "scenario": "32HeldStereo",
+        "changePercent": {
+          "wallSeconds": -9.605627306273078,
+          "cpuSeconds": -9.431025591277164,
+          "wallP95": -10.121418643144708,
+          "cpuP95": -9.841056910569112,
+          "wallMax": -10.591908427713237,
+          "cpuMax": -11.779799393515288,
+          "peakRssBytes": 0.1520527116066983
+        },
+        "median": {
+          "baseline": {
+            "wallSeconds": 0.11707200000000001,
+            "cpuSeconds": 0.116591641,
+            "wallP95": 0.00012349998,
+            "cpuP95": 0.000123,
+            "wallMax": 0.0003209999995,
+            "cpuMax": 0.0002679375,
+            "peakRssBytes": 16162816.0
+          },
+          "candidate": {
+            "wallSeconds": 0.10582649999999999,
+            "cpuSeconds": 0.1055958535,
+            "wallP95": 0.00011100003,
+            "cpuP95": 0.0001108955,
+            "wallMax": 0.00028699997350000003,
+            "cpuMax": 0.00023637499999999999,
+            "peakRssBytes": 16187392.0
+          }
+        },
+        "investigationAlarm": false
+      },
+      {
+        "scenario": "32HeldBinaural",
+        "changePercent": {
+          "wallSeconds": -59.96380059332995,
+          "cpuSeconds": -59.93091130237678,
+          "wallP95": -60.93896557949263,
+          "cpuP95": -60.31436900155782,
+          "wallMax": -56.38075303626293,
+          "cpuMax": -56.78286040369087,
+          "peakRssBytes": -0.10040160642570406
+        },
+        "median": {
+          "baseline": {
+            "wallSeconds": 0.4936545,
+            "cpuSeconds": 0.4916118145,
+            "wallP95": 0.0005325000095,
+            "cpuP95": 0.0005209164999999999,
+            "wallMax": 0.0009560000035,
+            "cpuMax": 0.0008209994999999999,
+            "peakRssBytes": 16318464.0
+          },
+          "candidate": {
+            "wallSeconds": 0.1976405,
+            "cpuSeconds": 0.196984374,
+            "wallP95": 0.000208000012,
+            "cpuP95": 0.000206729,
+            "wallMax": 0.00041700000250000004,
+            "cpuMax": 0.0003548125,
+            "peakRssBytes": 16302080.0
+          }
+        },
+        "investigationAlarm": false
+      },
+      {
+        "scenario": "fourSequences32VoicesTwoLfosEffectsStereo",
+        "changePercent": {
+          "wallSeconds": 0.1593860422784532,
+          "cpuSeconds": -0.4916938178988861,
+          "wallP95": 2.9493098459513645,
+          "cpuP95": 1.3453353119418532,
+          "wallMax": 349.9211384063181,
+          "cpuMax": 25.5771240975228,
+          "peakRssBytes": -0.0849617672047609
+        },
+        "median": {
+          "baseline": {
+            "wallSeconds": 0.44389049999999997,
+            "cpuSeconds": 0.43955555700000004,
+            "wallP95": 0.0005424999689999999,
+            "cpuP95": 0.0005064164999999999,
+            "wallMax": 0.00126799999,
+            "cpuMax": 0.000986313,
+            "peakRssBytes": 19283968.0
+          },
+          "candidate": {
+            "wallSeconds": 0.4445979995,
+            "cpuSeconds": 0.43739428950000003,
+            "wallP95": 0.0005584999740000001,
+            "cpuP95": 0.0005132295,
+            "wallMax": 0.00570499999,
+            "cpuMax": 0.0012385834999999999,
+            "peakRssBytes": 19267584.0
+          }
+        },
+        "investigationAlarm": false
+      },
+      {
+        "scenario": "fourSequences32VoicesTwoLfosEffectsBinaural",
+        "changePercent": {
+          "wallSeconds": -47.80595154423101,
+          "cpuSeconds": -48.49513974364825,
+          "wallP95": -48.39826872035131,
+          "cpuP95": -47.89399492353785,
+          "wallMax": -18.721547401766426,
+          "cpuMax": -6.650274997745919,
+          "peakRssBytes": -0.08382229673092878
+        },
+        "median": {
+          "baseline": {
+            "wallSeconds": 1.4284780000000001,
+            "cpuSeconds": 1.364642525,
+            "wallP95": 0.001732500005,
+            "cpuP95": 0.0016099795,
+            "wallMax": 0.0238335,
+            "cpuMax": 0.00277275,
+            "peakRssBytes": 19546112.0
+          },
+          "candidate": {
+            "wallSeconds": 0.7455804994999999,
+            "cpuSeconds": 0.7028572255,
+            "wallP95": 0.0008939999970000001,
+            "cpuP95": 0.000838896,
+            "wallMax": 0.0193715,
+            "cpuMax": 0.0025883545,
+            "peakRssBytes": 19529728.0
+          }
+        },
+        "investigationAlarm": false
+      }
+    ],
+    "producerScope": "Actual ObjC publishSequence including preflight/merge/banks; actual Android JNI/native publication with supplied array accessors, excluding Java validation/VM allocation time.",
+    "producers": {
+      "apple": [
+        {
+          "case": "F01-ios-producer",
+          "arguments": [
+            "-2",
+            "1",
+            "100"
+          ],
+          "median": {
+            "baseline": {
+              "cpuSeconds": 0.004031877,
+              "wallSeconds": 0.004195999965000001,
+              "cpuP95": 5.9250000000000004e-05,
+              "wallP95": 8.499997775e-05,
+              "cpuMax": 0.00011156250000000001,
+              "wallMax": 0.0001485000245,
+              "peakRssBytes": 16064512.0
+            },
+            "candidate": {
+              "cpuSeconds": 0.0019919795000000002,
+              "wallSeconds": 0.0022105000099999998,
+              "cpuP95": 2.3604e-05,
+              "wallP95": 5.2499992299999995e-05,
+              "cpuMax": 5.90005e-05,
+              "wallMax": 0.000101999991,
+              "peakRssBytes": 16031744.0
+            }
+          },
+          "changePercent": {
+            "cpuSeconds": -50.59423935799627,
+            "wallSeconds": -47.318874441411026,
+            "cpuP95": -60.16202531645569,
+            "wallP95": -38.23528700864867,
+            "cpuMax": -47.114397759103646,
+            "wallMax": -31.313148705911487,
+            "peakRssBytes": -0.20397756246812726
+          },
+          "investigate": false,
+          "trials": {
+            "baseline": [
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.004739332,
+                "wallSeconds": 0.00478400022,
+                "cpuP95": 0.000102625,
+                "wallP95": 0.00010200002,
+                "cpuMax": 0.000117125,
+                "wallMax": 0.000140000018,
+                "peakRssBytes": 16072704,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.003345467,
+                "wallSeconds": 0.00332500006,
+                "cpuP95": 3.5708e-05,
+                "wallP95": 3.50000337e-05,
+                "cpuMax": 3.6458e-05,
+                "wallMax": 3.69999907e-05,
+                "peakRssBytes": 16105472,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.00353067,
+                "wallSeconds": 0.00352499995,
+                "cpuP95": 3.7166e-05,
+                "wallP95": 3.69999907e-05,
+                "cpuMax": 4.5166e-05,
+                "wallMax": 5.19999885e-05,
+                "peakRssBytes": 16089088,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.004559797,
+                "wallSeconds": 0.00598299986,
+                "cpuP95": 0.000119667,
+                "wallP95": 0.000196999987,
+                "cpuMax": 0.000198209,
+                "wallMax": 0.000513000006,
+                "peakRssBytes": 16056320,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.004227753,
+                "wallSeconds": 0.0048,
+                "cpuP95": 6.9583e-05,
+                "wallP95": 0.000108000007,
+                "cpuMax": 0.000146083,
+                "wallMax": 0.000157000031,
+                "peakRssBytes": 16056320,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.004374921,
+                "wallSeconds": 0.00503800018,
+                "cpuP95": 8.0292e-05,
+                "wallP95": 0.000118000025,
+                "cpuMax": 0.000110375,
+                "wallMax": 0.000210999977,
+                "peakRssBytes": 16105472,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.00383617,
+                "wallSeconds": 0.00409499987,
+                "cpuP95": 5.1625e-05,
+                "wallP95": 6.90000015e-05,
+                "cpuMax": 7.1417e-05,
+                "wallMax": 0.000126000028,
+                "peakRssBytes": 16105472,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.003898751,
+                "wallSeconds": 0.00402900006,
+                "cpuP95": 4.9208e-05,
+                "wallP95": 4.90000239e-05,
+                "cpuMax": 0.000105416,
+                "wallMax": 0.000167999999,
+                "peakRssBytes": 16056320,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.003880164,
+                "wallSeconds": 0.00407700002,
+                "cpuP95": 4.225e-05,
+                "wallP95": 4.29999782e-05,
+                "cpuMax": 0.000236042,
+                "wallMax": 0.000409999979,
+                "peakRssBytes": 16056320,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.004165003,
+                "wallSeconds": 0.00429700006,
+                "cpuP95": 6.6875e-05,
+                "wallP95": 0.000100999954,
+                "cpuMax": 0.00011275,
+                "wallMax": 0.000123000005,
+                "peakRssBytes": 16056320,
+                "state": "ad9253a1c5d1950a"
+              }
+            ],
+            "candidate": [
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.001861706,
+                "wallSeconds": 0.00189299998,
+                "cpuP95": 1.975e-05,
+                "wallP95": 1.99999777e-05,
+                "cpuMax": 4.9292e-05,
+                "wallMax": 0.000101999962,
+                "peakRssBytes": 16023552,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.002942041,
+                "wallSeconds": 0.00299300003,
+                "cpuP95": 5.2709e-05,
+                "wallP95": 5.70000266e-05,
+                "cpuMax": 7.5542e-05,
+                "wallMax": 8.60000146e-05,
+                "peakRssBytes": 16007168,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.002283921,
+                "wallSeconds": 0.0025419998,
+                "cpuP95": 5.2542e-05,
+                "wallP95": 5.7999976e-05,
+                "cpuMax": 8.0042e-05,
+                "wallMax": 0.000228999997,
+                "peakRssBytes": 16056320,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.001960502,
+                "wallSeconds": 0.00225599995,
+                "cpuP95": 2.5375e-05,
+                "wallP95": 4.7999958e-05,
+                "cpuMax": 4.8125e-05,
+                "wallMax": 0.00010200002,
+                "peakRssBytes": 16056320,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.003786628,
+                "wallSeconds": 0.00415699993,
+                "cpuP95": 6.825e-05,
+                "wallP95": 9.30000097e-05,
+                "cpuMax": 0.000109125,
+                "wallMax": 0.000143000041,
+                "peakRssBytes": 16072704,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.00189408,
+                "wallSeconds": 0.00214300002,
+                "cpuP95": 2.1833e-05,
+                "wallP95": 6.20000064e-05,
+                "cpuMax": 3.85e-05,
+                "wallMax": 7.70000042e-05,
+                "peakRssBytes": 16023552,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.002150411,
+                "wallSeconds": 0.00260499999,
+                "cpuP95": 3.475e-05,
+                "wallP95": 7.00000091e-05,
+                "cpuMax": 6.8709e-05,
+                "wallMax": 0.00011600001,
+                "peakRssBytes": 16023552,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.002023457,
+                "wallSeconds": 0.00216500007,
+                "cpuP95": 1.9917e-05,
+                "wallP95": 2.00000359e-05,
+                "cpuMax": 0.000105208,
+                "wallMax": 0.000188999984,
+                "peakRssBytes": 16039936,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.001848751,
+                "wallSeconds": 0.00183199998,
+                "cpuP95": 1.8875e-05,
+                "wallP95": 1.90000283e-05,
+                "cpuMax": 2.0792e-05,
+                "wallMax": 1.99999777e-05,
+                "peakRssBytes": 16039936,
+                "state": "ad9253a1c5d1950a"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.001868205,
+                "wallSeconds": 0.00184199994,
+                "cpuP95": 1.9334e-05,
+                "wallP95": 1.90000283e-05,
+                "cpuMax": 2.1125e-05,
+                "wallMax": 2.10000435e-05,
+                "peakRssBytes": 16023552,
+                "state": "ad9253a1c5d1950a"
+              }
+            ]
+          }
+        },
+        {
+          "case": "F01-ios-producer",
+          "arguments": [
+            "-2",
+            "512",
+            "100"
+          ],
+          "median": {
+            "baseline": {
+              "cpuSeconds": 0.545239295,
+              "wallSeconds": 0.684606,
+              "cpuP95": 0.007901749999999999,
+              "wallP95": 0.01036199998,
+              "cpuMax": 0.0094417085,
+              "wallMax": 0.03814950005,
+              "peakRssBytes": 16416768.0
+            },
+            "candidate": {
+              "cpuSeconds": 0.5160989380000001,
+              "wallSeconds": 0.5853425,
+              "cpuP95": 0.006639395500000001,
+              "wallP95": 0.008276999989999999,
+              "cpuMax": 0.008451479,
+              "wallMax": 0.0207985,
+              "peakRssBytes": 16384000.0
+            }
+          },
+          "changePercent": {
+            "cpuSeconds": -5.344507864202996,
+            "wallSeconds": -14.499361676643218,
+            "cpuP95": -15.975631980257521,
+            "wallP95": -20.12159808940669,
+            "cpuMax": -10.487821139574471,
+            "wallMax": -45.481592228624756,
+            "peakRssBytes": -0.1996007984031989
+          },
+          "investigate": false,
+          "trials": {
+            "baseline": [
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.602589458,
+                "wallSeconds": 0.991652,
+                "cpuP95": 0.009096125,
+                "wallP95": 0.014166,
+                "cpuMax": 0.010565083,
+                "wallMax": 0.197125,
+                "peakRssBytes": 16400384,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.597929088,
+                "wallSeconds": 0.828049,
+                "cpuP95": 0.009122416,
+                "wallP95": 0.019393,
+                "cpuMax": 0.011722041,
+                "wallMax": 0.0324800001,
+                "peakRssBytes": 16416768,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.558131001,
+                "wallSeconds": 0.735495,
+                "cpuP95": 0.008692917,
+                "wallP95": 0.019207,
+                "cpuMax": 0.011286625,
+                "wallMax": 0.043819,
+                "peakRssBytes": 16416768,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.688245032,
+                "wallSeconds": 1.138982,
+                "cpuP95": 0.011456958,
+                "wallP95": 0.019331,
+                "cpuMax": 0.014053542,
+                "wallMax": 0.114049,
+                "peakRssBytes": 16433152,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.512468954,
+                "wallSeconds": 0.53594,
+                "cpuP95": 0.005868792,
+                "wallP95": 0.00652200001,
+                "cpuMax": 0.007137541,
+                "wallMax": 0.00835299998,
+                "peakRssBytes": 16400384,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.50245037,
+                "wallSeconds": 0.633717,
+                "cpuP95": 0.005867542,
+                "wallP95": 0.00733200001,
+                "cpuMax": 0.006549916,
+                "wallMax": 0.056014,
+                "peakRssBytes": 16384000,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.612448548,
+                "wallSeconds": 0.806582,
+                "cpuP95": 0.009445375,
+                "wallP95": 0.012802,
+                "cpuMax": 0.011511,
+                "wallMax": 0.0875880001,
+                "peakRssBytes": 16433152,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.497018963,
+                "wallSeconds": 0.516002,
+                "cpuP95": 0.00548225,
+                "wallP95": 0.00622899999,
+                "cpuMax": 0.006093,
+                "wallMax": 0.00705199997,
+                "peakRssBytes": 16433152,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.532347589,
+                "wallSeconds": 0.56793,
+                "cpuP95": 0.007110583,
+                "wallP95": 0.00792199996,
+                "cpuMax": 0.008318334,
+                "wallMax": 0.010948,
+                "peakRssBytes": 16416768,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.511318914,
+                "wallSeconds": 0.525494,
+                "cpuP95": 0.005742791,
+                "wallP95": 0.00604999997,
+                "cpuMax": 0.007188375,
+                "wallMax": 0.007789,
+                "peakRssBytes": 16400384,
+                "state": "cfc275a0135998db"
+              }
+            ],
+            "candidate": [
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.622195043,
+                "wallSeconds": 1.004662,
+                "cpuP95": 0.009422167,
+                "wallP95": 0.022151,
+                "cpuMax": 0.0099125,
+                "wallMax": 0.060628,
+                "peakRssBytes": 16400384,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.564601831,
+                "wallSeconds": 0.854054,
+                "cpuP95": 0.009269375,
+                "wallP95": 0.022673,
+                "cpuMax": 0.010181417,
+                "wallMax": 0.029405,
+                "peakRssBytes": 16367616,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.665354705,
+                "wallSeconds": 0.951869,
+                "cpuP95": 0.011066458,
+                "wallP95": 0.016944,
+                "cpuMax": 0.01325325,
+                "wallMax": 0.040739,
+                "peakRssBytes": 16367616,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.541680032,
+                "wallSeconds": 0.59314,
+                "cpuP95": 0.007106,
+                "wallP95": 0.008714,
+                "cpuMax": 0.008603083,
+                "wallMax": 0.012192,
+                "peakRssBytes": 16384000,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.49149913,
+                "wallSeconds": 0.518959,
+                "cpuP95": 0.005745083,
+                "wallP95": 0.00635000004,
+                "cpuMax": 0.0081665,
+                "wallMax": 0.00945300004,
+                "peakRssBytes": 16367616,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.484201999,
+                "wallSeconds": 0.518394,
+                "cpuP95": 0.005645708,
+                "wallP95": 0.00653800002,
+                "cpuMax": 0.006568333,
+                "wallMax": 0.00842000003,
+                "peakRssBytes": 16367616,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.508232337,
+                "wallSeconds": 0.732115,
+                "cpuP95": 0.007188042,
+                "wallP95": 0.011966,
+                "cpuMax": 0.008979417,
+                "wallMax": 0.131141,
+                "peakRssBytes": 16384000,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.495733161,
+                "wallSeconds": 0.577545,
+                "cpuP95": 0.005730167,
+                "wallP95": 0.00730100001,
+                "cpuMax": 0.006596209,
+                "wallMax": 0.04132,
+                "peakRssBytes": 16384000,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.523965539,
+                "wallSeconds": 0.552776,
+                "cpuP95": 0.006172791,
+                "wallP95": 0.00783999998,
+                "cpuMax": 0.008299875,
+                "wallMax": 0.010852,
+                "peakRssBytes": 16400384,
+                "state": "cfc275a0135998db"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.486595584,
+                "wallSeconds": 0.505696,
+                "cpuP95": 0.005393333,
+                "wallP95": 0.00605500001,
+                "cpuMax": 0.0065475,
+                "wallMax": 0.00720200001,
+                "peakRssBytes": 16384000,
+                "state": "cfc275a0135998db"
+              }
+            ]
+          }
+        }
+      ],
+      "androidJniNative": [
+        {
+          "case": "F01-android-producer",
+          "arguments": [
+            "1",
+            "100"
+          ],
+          "median": {
+            "baseline": {
+              "cpuSeconds": 0.0025908765,
+              "wallSeconds": 0.00281149987,
+              "cpuP95": 3.4666500000000004e-05,
+              "wallP95": 4.049998825e-05,
+              "cpuMax": 7.602100000000001e-05,
+              "wallMax": 0.0001195000075,
+              "peakRssBytes": 12599296.0
+            },
+            "candidate": {
+              "cpuSeconds": 5.3146500000000004e-05,
+              "wallSeconds": 3.8000027399999996e-05,
+              "cpuP95": 5.84e-07,
+              "wallP95": 1.00000761e-06,
+              "cpuMax": 6.46e-07,
+              "wallMax": 1.00000761e-06,
+              "peakRssBytes": 12591104.0
+            }
+          },
+          "changePercent": {
+            "cpuSeconds": -97.94870577582529,
+            "wallSeconds": -98.6484072858947,
+            "cpuP95": -98.31537651623326,
+            "wallP95": -97.53084469104753,
+            "cpuMax": -99.15023480354112,
+            "wallMax": -99.16317360063765,
+            "peakRssBytes": -0.06501950585175997
+          },
+          "investigate": false,
+          "trials": {
+            "baseline": [
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.00232171,
+                "wallSeconds": 0.00234800007,
+                "cpuP95": 3.3292e-05,
+                "wallP95": 3.30000184e-05,
+                "cpuMax": 3.9792e-05,
+                "wallMax": 5.7999976e-05,
+                "peakRssBytes": 12615680,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.002704834,
+                "wallSeconds": 0.002844,
+                "cpuP95": 3.3e-05,
+                "wallP95": 4.29999782e-05,
+                "cpuMax": 9.5042e-05,
+                "wallMax": 0.00012099999,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.002223293,
+                "wallSeconds": 0.00220099982,
+                "cpuP95": 2.5208e-05,
+                "wallP95": 2.50000157e-05,
+                "cpuMax": 2.975e-05,
+                "wallMax": 2.99999956e-05,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.003585701,
+                "wallSeconds": 0.00455399981,
+                "cpuP95": 7.625e-05,
+                "wallP95": 0.000117999967,
+                "cpuMax": 0.000127541,
+                "wallMax": 0.000254000013,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.002432085,
+                "wallSeconds": 0.00248199998,
+                "cpuP95": 3.125e-05,
+                "wallP95": 3.49999755e-05,
+                "cpuMax": 9.5125e-05,
+                "wallMax": 9.49999667e-05,
+                "peakRssBytes": 12582912,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.002514837,
+                "wallSeconds": 0.00283399987,
+                "cpuP95": 3.8625e-05,
+                "wallP95": 5.50000113e-05,
+                "cpuMax": 5.5375e-05,
+                "wallMax": 0.000118000025,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.002168163,
+                "wallSeconds": 0.00217199983,
+                "cpuP95": 2.5458e-05,
+                "wallP95": 2.50000157e-05,
+                "cpuMax": 5.7e-05,
+                "wallMax": 8.39999993e-05,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.003020918,
+                "wallSeconds": 0.0033030003,
+                "cpuP95": 5.225e-05,
+                "wallP95": 6.29999558e-05,
+                "cpuMax": 0.000137333,
+                "wallMax": 0.000155000016,
+                "peakRssBytes": 12615680,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.002666916,
+                "wallSeconds": 0.00278899987,
+                "cpuP95": 3.6041e-05,
+                "wallP95": 3.79999983e-05,
+                "cpuMax": 5.0166e-05,
+                "wallMax": 0.000121999998,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 0.003084165,
+                "wallSeconds": 0.00391400018,
+                "cpuP95": 4.6416e-05,
+                "wallP95": 8.10000347e-05,
+                "cpuMax": 0.000157666,
+                "wallMax": 0.000350000046,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              }
+            ],
+            "candidate": [
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 5.2373e-05,
+                "wallSeconds": 3.69999907e-05,
+                "cpuP95": 5.83e-07,
+                "wallP95": 1.00000761e-06,
+                "cpuMax": 6.25e-07,
+                "wallMax": 1.00000761e-06,
+                "peakRssBytes": 12582912,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 5.321e-05,
+                "wallSeconds": 3.90000059e-05,
+                "cpuP95": 5.84e-07,
+                "wallP95": 1.00000761e-06,
+                "cpuMax": 6.67e-07,
+                "wallMax": 1.00000761e-06,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 5.9585e-05,
+                "wallSeconds": 3.70000489e-05,
+                "cpuP95": 6.25e-07,
+                "wallP95": 1.00000761e-06,
+                "cpuMax": 7e-06,
+                "wallMax": 1.00000761e-06,
+                "peakRssBytes": 12582912,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 5.2414e-05,
+                "wallSeconds": 3.69998743e-05,
+                "cpuP95": 5.42e-07,
+                "wallP95": 1.00000761e-06,
+                "cpuMax": 6.25e-07,
+                "wallMax": 1.00000761e-06,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 5.1375e-05,
+                "wallSeconds": 3.40000261e-05,
+                "cpuP95": 5.42e-07,
+                "wallP95": 1.00000761e-06,
+                "cpuMax": 5.42e-07,
+                "wallMax": 1.00000761e-06,
+                "peakRssBytes": 12582912,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 6.0294e-05,
+                "wallSeconds": 6.69999281e-05,
+                "cpuP95": 5.84e-07,
+                "wallP95": 1.00000761e-06,
+                "cpuMax": 7.959e-06,
+                "wallMax": 3.40000261e-05,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 5.3083e-05,
+                "wallSeconds": 3.69999325e-05,
+                "cpuP95": 5.84e-07,
+                "wallP95": 1.00000761e-06,
+                "cpuMax": 6.25e-07,
+                "wallMax": 1.00000761e-06,
+                "peakRssBytes": 12582912,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 5.2542e-05,
+                "wallSeconds": 3.90000059e-05,
+                "cpuP95": 5.84e-07,
+                "wallP95": 1.00000761e-06,
+                "cpuMax": 6.25e-07,
+                "wallMax": 1.00000761e-06,
+                "peakRssBytes": 12582912,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 5.4001e-05,
+                "wallSeconds": 3.90000059e-05,
+                "cpuP95": 6.25e-07,
+                "wallP95": 1.00000761e-06,
+                "cpuMax": 1.834e-06,
+                "wallMax": 2.00001523e-06,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              },
+              {
+                "steps": 1,
+                "loops": 100,
+                "cpuSeconds": 5.6917e-05,
+                "wallSeconds": 4.90000239e-05,
+                "cpuP95": 6.25e-07,
+                "wallP95": 1.00000761e-06,
+                "cpuMax": 3.291e-06,
+                "wallMax": 1.49999978e-05,
+                "peakRssBytes": 12599296,
+                "state": "4f199977141f001f"
+              }
+            ]
+          }
+        },
+        {
+          "case": "F01-android-producer",
+          "arguments": [
+            "512",
+            "100"
+          ],
+          "median": {
+            "baseline": {
+              "cpuSeconds": 0.0268086315,
+              "wallSeconds": 0.03128149995,
+              "cpuP95": 0.0006086045,
+              "wallP95": 0.0006529999955,
+              "cpuMax": 0.000782792,
+              "wallMax": 0.0012635000155,
+              "peakRssBytes": 14925824.0
+            },
+            "candidate": {
+              "cpuSeconds": 0.0231681885,
+              "wallSeconds": 0.02590450005,
+              "cpuP95": 0.000434917,
+              "wallP95": 0.0006125000075,
+              "cpuMax": 0.0006801665,
+              "wallMax": 0.0009019999995,
+              "peakRssBytes": 14909440.0
+            }
+          },
+          "changePercent": {
+            "cpuSeconds": -13.579369017773246,
+            "wallSeconds": -17.18907312179574,
+            "cpuP95": -28.53864866263722,
+            "wallP95": -6.202142156063772,
+            "cpuMax": -13.110187636051474,
+            "wallMax": -28.61100210251639,
+            "peakRssBytes": -0.1097694840834218
+          },
+          "investigate": false,
+          "trials": {
+            "baseline": [
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.020374042,
+                "wallSeconds": 0.0217589999,
+                "cpuP95": 0.0002705,
+                "wallP95": 0.000299000007,
+                "cpuMax": 0.000784,
+                "wallMax": 0.000782000017,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.023626836,
+                "wallSeconds": 0.0257720001,
+                "cpuP95": 0.000452458,
+                "wallP95": 0.000542000053,
+                "cpuMax": 0.000628959,
+                "wallMax": 0.000653999974,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.032183628,
+                "wallSeconds": 0.063079,
+                "cpuP95": 0.000706458,
+                "wallP95": 0.00179499999,
+                "cpuMax": 0.001038333,
+                "wallMax": 0.007117,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.02897162,
+                "wallSeconds": 0.038493,
+                "cpuP95": 0.000579459,
+                "wallP95": 0.001047,
+                "cpuMax": 0.0008655,
+                "wallMax": 0.00175599998,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.03446692,
+                "wallSeconds": 0.0444729998,
+                "cpuP95": 0.000767333,
+                "wallP95": 0.000981999969,
+                "cpuMax": 0.001082167,
+                "wallMax": 0.00167700002,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.028810459,
+                "wallSeconds": 0.0298639999,
+                "cpuP95": 0.000647208,
+                "wallP95": 0.000662999984,
+                "cpuMax": 0.000693458,
+                "wallMax": 0.000702999998,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.023278747,
+                "wallSeconds": 0.0853249997,
+                "cpuP95": 0.000392584,
+                "wallP95": 0.000524999981,
+                "cpuMax": 0.000814625,
+                "wallMax": 0.030324,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.027564921,
+                "wallSeconds": 0.032699,
+                "cpuP95": 0.000651917,
+                "wallP95": 0.000754999986,
+                "cpuMax": 0.000673916,
+                "wallMax": 0.00167700002,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.024221626,
+                "wallSeconds": 0.0262579999,
+                "cpuP95": 0.00050925,
+                "wallP95": 0.000579999993,
+                "cpuMax": 0.000781584,
+                "wallMax": 0.000831999991,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.026052342,
+                "wallSeconds": 0.027325,
+                "cpuP95": 0.00063775,
+                "wallP95": 0.000643000007,
+                "cpuMax": 0.000714458,
+                "wallMax": 0.000850000011,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              }
+            ],
+            "candidate": [
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.021893629,
+                "wallSeconds": 0.0259630001,
+                "cpuP95": 0.000351167,
+                "wallP95": 0.000456999987,
+                "cpuMax": 0.000675041,
+                "wallMax": 0.00100400002,
+                "peakRssBytes": 14909440,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.020191752,
+                "wallSeconds": 0.02116,
+                "cpuP95": 0.000363125,
+                "wallP95": 0.000392000016,
+                "cpuMax": 0.000640333,
+                "wallMax": 0.000774000015,
+                "peakRssBytes": 14909440,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.027217577,
+                "wallSeconds": 0.0327099999,
+                "cpuP95": 0.0006175,
+                "wallP95": 0.000762999989,
+                "cpuMax": 0.000779334,
+                "wallMax": 0.00114799995,
+                "peakRssBytes": 14909440,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.022417883,
+                "wallSeconds": 0.0257300001,
+                "cpuP95": 0.000408542,
+                "wallP95": 0.00066400005,
+                "cpuMax": 0.000867625,
+                "wallMax": 0.00108300004,
+                "peakRssBytes": 14909440,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.022948083,
+                "wallSeconds": 0.0266119999,
+                "cpuP95": 0.000448917,
+                "wallP95": 0.000637000019,
+                "cpuMax": 0.000665542,
+                "wallMax": 0.000843000016,
+                "peakRssBytes": 14909440,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.023388294,
+                "wallSeconds": 0.025846,
+                "cpuP95": 0.000420917,
+                "wallP95": 0.000609000039,
+                "cpuMax": 0.000744042,
+                "wallMax": 0.000960999983,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.01989463,
+                "wallSeconds": 0.020675,
+                "cpuP95": 0.000321625,
+                "wallP95": 0.000337000005,
+                "cpuMax": 0.0004755,
+                "wallMax": 0.000636000012,
+                "peakRssBytes": 14909440,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.023469452,
+                "wallSeconds": 0.0251389999,
+                "cpuP95": 0.000567208,
+                "wallP95": 0.000577000028,
+                "cpuMax": 0.00072425,
+                "wallMax": 0.00079900003,
+                "peakRssBytes": 14909440,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.025675992,
+                "wallSeconds": 0.0272759998,
+                "cpuP95": 0.000607459,
+                "wallP95": 0.000615999976,
+                "cpuMax": 0.000637416,
+                "wallMax": 0.00072099996,
+                "peakRssBytes": 14909440,
+                "state": "9853653ff1272aef"
+              },
+              {
+                "steps": 512,
+                "loops": 100,
+                "cpuSeconds": 0.029403207,
+                "wallSeconds": 0.0322060001,
+                "cpuP95": 0.000632291,
+                "wallP95": 0.000652000017,
+                "cpuMax": 0.000685292,
+                "wallMax": 0.00101900002,
+                "peakRssBytes": 14925824,
+                "state": "9853653ff1272aef"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "maximaAndMemory": "All raw maxima and per-process peak RSS are retained in the evidence. Host scheduling stalls remain visible; these measurements do not certify zero underruns, physical latency, battery, thermal behavior or whole-process memory bounds."
+  },
+  "decisions": [
+    {
+      "id": "F01",
+      "status": "incorporated",
+      "finding": "Redundant complete-bank copying and repeated Apple preparation",
+      "implementation": "Reserve replacement storage without copying; initialize all live Android steps and header; Apple preflight resets/prepares once and commits prepared storage. Generic partial writers retain inheritance, validation and atomic failures.",
+      "compatibility": "Compatible; no public contract change",
+      "evidence": [
+        "sequence_replacement_regression",
+        "generic and replacement publication concurrency, 1000 cycles each",
+        "Java canonical-memory/corpus and Apple contracts",
+        "paired producer state equality"
+      ]
+    },
+    {
+      "id": "F02",
+      "status": "incorporated only with F03/F04",
+      "finding": "Apple per-sample FIR",
+      "implementation": "ARM64 size-optimized Release time blocks reuse coefficients for eight/four samples and preserve the own-Apple fused lane accumulation. Stereo and other Apple build modes stream. Spatial tiles stop before native attacks and use saved sample clocks. Helpers stay on the stack and never escape.",
+      "compatibility": "Compatible under the frozen Release toolchain; other build modes retain streaming FIR",
+      "rejectedExperiments": "All-FMA at O3 and Android-style mixed accumulation at Apple -Os changed sample bits and were rejected. The first whole-callback helper prototype changed stereo timing by +206%/+20% and was rejected. Protected FIR alone still regresses idle CPU 20.13% and one stereo voice 2.89% in long warmed trials; it is not accepted independently. The final F02/F03/F04 bundle improves those cases by 29.51%/6.19% and clears every final alarm."
+    },
+    {
+      "id": "F03",
+      "status": "incorporated in atomic Apple runtime bundle",
+      "finding": "Repeated stable held-control derivation",
+      "implementation": "Skip unchanged derived held controls only after initialization and ramp completion; preserve sequence sweeps and the final ramp sample.",
+      "compatibility": "Compatible; original semantic voice state retained"
+    },
+    {
+      "id": "F04",
+      "status": "incorporated in atomic Apple runtime bundle",
+      "finding": "Idle effect-routing overhead",
+      "implementation": "At a block boundary, bypass only a fully quiescent unity-gain effects state; keep the original separate selected/dry arithmetic and every send tick. Ramping, tails, processing changes and later enabling retain the full path.",
+      "compatibility": "Compatible; fractional sends and complete hidden state compared byte-for-byte"
+    },
+    {
+      "id": "F05",
+      "status": "incorporated",
+      "finding": "Empty poll/prune allocations and unknown-ID position retention",
+      "implementation": "Return null for empty JNI completion polls, already handled by Java; skip empty-generation pruning; never retain a position for an unknown generation. Keep the 10 ms event cadence and queued/active ownership.",
+      "compatibility": "Compatible; valid unknown edits remain queued accepted no-ops, including existing queue failure behavior",
+      "evidence": "Idle JNI regression observes zero NewDoubleArray calls and one durable stop delivery. Apple regression checks 1,000 unknown edits, queued/active retention and retirement. 100,000 empty prune calls use about 96% less CPU in the isolated host experiment; retained allocations are measured within one autorelease pool, not claimed as physical memory savings."
+    },
+    {
+      "id": "F06",
+      "status": "deferred",
+      "finding": "Fixed transport and effects reservation",
+      "reason": "Preserve callback preallocation and current layout; no physical whole-process memory evidence justifies dynamic capacity storage.",
+      "arm64HostBytes": {
+        "transport": 8627848,
+        "effectsHeap192k": 13741712
+      },
+      "followup": "Physical footprint/RSS peaks and recovery at supported device rates; any future capacity change must preserve 1\u20134 slots and all limits."
+    },
+    {
+      "id": "F07",
+      "status": "retain existing implementation",
+      "finding": "Onset, waveform/filter/modulation, limiter and diagnostic costs",
+      "reason": "No measured replacement justifies approximation or changing phases, RNG, coefficient cadence, limiting, gain, meters or buffers. Existing formulas and scheduling are preserved."
+    },
+    {
+      "id": "F08",
+      "status": "implemented",
+      "finding": "No own-Apple full-renderer comparison harness",
+      "implementation": "Extract actual production ObjC callback and helpers into an isolated macOS harness, with deterministic noise seed/disabled-diagnostic clock only, bounded byte-stream comparison and independent warmed CPU/wall benchmark. No AVAudioEngine/session/Titanium lifecycle is emulated as accepted."
+    }
+  ],
+  "areaCoverage": [
+    {
+      "area": "bridge and validation",
+      "conclusion": "Closed option contracts preserved; Java/iOS corpora, API linkage, native packet/state equality and bounded memory regression pass. F01/F05."
+    },
+    {
+      "area": "publication, banks and transport",
+      "conclusion": "Full versus partial write paths, prepared commit, durable events, generic/full concurrent publication and ten-minute five-rate musical clock pass. F01."
+    },
+    {
+      "area": "voices, priorities, replacement and held controls",
+      "conclusion": "Original admission, priority, retrigger, phase/RNG and tail policy retained; held Android integration and own-Apple PCM/state traces pass. F03/F05."
+    },
+    {
+      "area": "waveforms, envelopes, filters, vibrato, FM and modulation",
+      "conclusion": "Formulas and cadence unchanged; own-Apple traces include sources, filters, two LFOs, ramps, releases and replacements; shared held/modulation checks pass. F03/F07."
+    },
+    {
+      "area": "binaural",
+      "conclusion": "Own-Apple Release kernel and full renderer compared; Android NEON and portable spatial state/ramp tests pass. F02/F08."
+    },
+    {
+      "area": "effects, mixing, limiter and output",
+      "conclusion": "Exact selected/dry arithmetic, input/send/master ramps, panic/drain/later-enable and all checkpoint buffers compared; shared effects/routing and legacy Android render pass. F04/F07."
+    },
+    {
+      "area": "statistics",
+      "conclusion": "Publication, reset and concurrency regression pass; timing is kept separate from sample/state comparison. Backend unknown fields and diagnostics cadence remain unchanged."
+    },
+    {
+      "area": "lifecycle and recovery",
+      "conclusion": "Control locking and callback stop/start/recovery policy unchanged. Generic transport/end/reuse and metadata lifecycle checked; actual route/session/device recovery remains pending."
+    },
+    {
+      "area": "memory and builds",
+      "conclusion": "Fixed native reservation retained; unnecessary transient objects and orphan metadata removed. Four Android ABI and device/simulator/Catalyst builds and binary/package matching verified. F05/F06."
+    }
+  ],
+  "verification": {
+    "recordedGroupCommandCount": 48,
+    "allCommandsExitZero": true,
+    "groups": [
+      "shared sequence/full-replacement/clock/concurrency/stats/held/routing/effects/modulation/spatial",
+      "API19 linkage, Java corpus/canonical memory, four Apple contract programs, Android native ends/publication/render/held"
+    ],
+    "independentReview": {
+      "findings": [],
+      "mode": "Read-only independent review of native diff and test/tools; reviewer did not execute builds or tests. Root executed verification separately."
+    },
+    "moduleBuilds": [
+      {
+        "platform": "android",
+        "command": [
+          "ti",
+          "build",
+          "-p",
+          "android",
+          "--sdk",
+          "13.4.1.GA",
+          "--build-only",
+          "--force"
+        ],
+        "exit": 0,
+        "reportedSeconds": 23.449
+      },
+      {
+        "platform": "ios",
+        "command": [
+          "ti",
+          "build",
+          "-p",
+          "ios",
+          "--sdk",
+          "13.4.1.GA",
+          "--build-only",
+          "--force"
+        ],
+        "exit": 0,
+        "reportedSeconds": 37.313
+      }
+    ],
+    "nativeArtifacts": {
+      "sdk": "13.4.1.GA",
+      "android": [
+        {
+          "member": "jni/arm64-v8a/liboboe.so",
+          "elfClass": 2,
+          "machine": 183,
+          "sha256": "2696179a9e302f4047ce04146de39f64930bdfaa75d51da63bc7af1a228b8d73",
+          "matchesBuild": true,
+          "dependencyUnchanged": true
+        },
+        {
+          "member": "jni/arm64-v8a/libti.synthengine.so",
+          "elfClass": 2,
+          "machine": 183,
+          "sha256": "a450bccbccff6834fb2bca187591070c49f809d8358ae7e4386c6e5348984d94",
+          "matchesBuild": true,
+          "dependencyUnchanged": null
+        },
+        {
+          "member": "jni/armeabi-v7a/liboboe.so",
+          "elfClass": 1,
+          "machine": 40,
+          "sha256": "6eebcff8923f11f79d10bd3404afccab9c8d9ba629709334fc76663894b0e914",
+          "matchesBuild": true,
+          "dependencyUnchanged": true
+        },
+        {
+          "member": "jni/armeabi-v7a/libti.synthengine.so",
+          "elfClass": 1,
+          "machine": 40,
+          "sha256": "ea5e5949734ad2e89c999f75ccca7fc7d413687accf9dbf0b58f3ec5b8e4f58f",
+          "matchesBuild": true,
+          "dependencyUnchanged": null
+        },
+        {
+          "member": "jni/x86/liboboe.so",
+          "elfClass": 1,
+          "machine": 3,
+          "sha256": "8846bdc73a1ad884e017c7f3082042184bb8c9876651f48e77faef24f7c7eec4",
+          "matchesBuild": true,
+          "dependencyUnchanged": true
+        },
+        {
+          "member": "jni/x86/libti.synthengine.so",
+          "elfClass": 1,
+          "machine": 3,
+          "sha256": "79c1cfd65fb4b8cb63501730d591251eafa1800bbc2ded63dd886086655611aa",
+          "matchesBuild": true,
+          "dependencyUnchanged": null
+        },
+        {
+          "member": "jni/x86_64/liboboe.so",
+          "elfClass": 2,
+          "machine": 62,
+          "sha256": "f1168819d87b8571bb7c8147176854a2e5783bae6e35d2a420d99dc19692db94",
+          "matchesBuild": true,
+          "dependencyUnchanged": true
+        },
+        {
+          "member": "jni/x86_64/libti.synthengine.so",
+          "elfClass": 2,
+          "machine": 62,
+          "sha256": "d7ef67135e3740df9e5e2000d318739c9c10dcaa4e086ebae9edb912d9618297",
+          "matchesBuild": true,
+          "dependencyUnchanged": null
+        }
+      ],
+      "apple": [
+        {
+          "slice": "ios-arm64",
+          "architectures": [
+            "arm64"
+          ],
+          "sha256": "796bebed7f77d3c62d8c273dab07462be409ccda7ea09b1fcd6d4e7e41a00cfb",
+          "matchesBuild": true
+        },
+        {
+          "slice": "ios-arm64_x86_64-maccatalyst",
+          "architectures": [
+            "x86_64",
+            "arm64"
+          ],
+          "sha256": "58ee2dfcf3348e5480b6d41a7841346569e1c7adf692e94376361600315ce1ab",
+          "matchesBuild": true
+        },
+        {
+          "slice": "ios-arm64_x86_64-simulator",
+          "architectures": [
+            "x86_64",
+            "arm64"
+          ],
+          "sha256": "699b054ba6449dc9d3d716a35b128dc717da1bc390387d2dddd7038bc701fd8a",
+          "matchesBuild": true
+        }
+      ],
+      "physicalAcceptance": false,
+      "aarSha256": "93efaa0c9ce47a0da7901b9e01fe3f89364860c272e137d17b1c7687b70ef09b"
+    },
+    "productionCallback": {
+      "object": "device arm64 TiSynthengineModule.o extracted from final production library",
+      "callbackAndLocalBlocks": [
+        {
+          "symbol": "___29-[TiSynthengineModule start:]_block_invoke.141",
+          "start": 21284,
+          "end": 39844
+        },
+        {
+          "symbol": "___29-[TiSynthengineModule start:]_block_invoke_2",
+          "start": 45388,
+          "end": 50616
+        },
+        {
+          "symbol": "___29-[TiSynthengineModule start:]_block_invoke_3",
+          "start": 50616,
+          "end": 52680
+        }
+      ],
+      "excludedControlTimerBlock": {
+        "symbol": "___29-[TiSynthengineModule start:]_block_invoke",
+        "start": 21220,
+        "end": 21264
+      },
+      "forbiddenRelocations": [],
+      "note": "The only retainBlock call is in control-thread start at 0x4b68; weak-owner release at 0x530c belongs to the main-queue event timer, not rendering."
+    }
+  },
+  "physicalPending": [
+    "Exclusive Android and iPad session with controlled route, volume, buffer and scenario",
+    "Sim80 and affected workloads; technical profiling separate from listening",
+    "Original ten-minute extreme-load criterion without relaxed limits",
+    "Whole-process physical memory, including 192 kHz projection limits and recovery peaks",
+    "Earlier bypass screen, Sim20 cost and strict visual Sim80 comparison"
+  ],
+  "rollback": "Runtime F02/F03/F04 is one reversible semantic change; revert the complete bundle. Sequence producer, control-memory fixes and verification tools are separate semantic topics. Rebuild matching packages after rollback. Keep frozen 7ab3110 source/toolchain/binaries for comparison.",
+  "evidence": {
+    "archive": "performance-review-evidence.zip",
+    "sha256": "2826fa7e892981b4c6f6e1608f1b390bef5e5ec0d8524b7047199c3bed2a46de",
+    "zipCRC": true,
+    "rawTrialsRetained": true,
+    "baselineSourcesBinariesAndFlagsFrozenSeparately": true
+  }
+}

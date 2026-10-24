@@ -242,6 +242,30 @@ The iOS renderer uses the same DSP header. Its output has no host-rendering test
 
 Spatial voice-steal and stop tails copy the filter history as well as oscillator state. After the source envelope or fade ends, both ports drain the FIR with zero input for `taps - 1` samples before freeing the voice; this preserves even 1 ms events. Ordinary voices bypass the FIR. CPU cost grows with spatial voices, including short replacement tails. Spatial held updates prepare coefficients outside audio, then ramp the FIR over 10 ms while retaining history. The intended output-rate range is 8 to 192 kHz. Interpolated generic HRTFs provide directional cues, but localization varies by listener.
 
+Android ARM64 and Apple ARM64 size-optimized Release builds reuse coefficients across eight consecutive samples, with four-sample and streaming fallbacks for partial blocks and position ramps. Apple retains its original stereo loop; its other build modes retain streaming FIR. Each platform preserves its own reference's floating-point accumulation. Tiles stop before native sequence attacks and retain per-sample clocks, gates, phase, history and mixing order. This changes neither the output buffer nor lookahead latency.
+
+## Own-platform performance verification
+
+The [performance review](performance-review.json) separates measured host improvements, exact compatibility checks and pending device acceptance. Its [raw evidence](performance-review-evidence.zip) retains rejected prototypes and the investigation of idle/stereo regressions. The Apple FIR, stable-control cache and exact idle-effects bypass are one validated runtime change: accepting the FIR alone would retain the isolated regressions.
+
+`tools/build_ios_render_host.py` compiles the actual Objective-C render-block body and voice/transport helpers on macOS. It replaces hardware/session/Titanium startup and fixes only the noise-seed/disabled-diagnostic clock. Output and semantic state are compared against a separately archived reference from the same platform. This is an Apple renderer test; it does not execute AVAudioEngine or establish iPad scheduling, route recovery, footprint or listening acceptance.
+
+```sh
+mkdir -p /tmp/synth-reference
+git archive 7ab3110 | tar -x -C /tmp/synth-reference
+python3 tools/build_ios_render_host.py --source /tmp/synth-reference --output /tmp/apple-reference
+python3 tools/build_ios_render_host.py --output /tmp/apple-candidate
+python3 tools/compare_ios_render.py /tmp/apple-reference /tmp/apple-candidate
+python3 tools/benchmark_performance_review.py --baseline /tmp/apple-reference --candidate /tmp/apple-candidate --output /tmp/apple-performance.json
+/tmp/apple-candidate --metadata
+```
+
+The build tool defaults to the module's Apple Release `-Os` optimization. The comparator streams PCM for every fixture block and full original voice/tail, FIR/filter, limiter, effect-buffer and transport state at fixture checkpoints. Cases include five engine rates, zero/short/irregular blocks, all sources, held updates, replacements, send and position ramps, four sequences, effects, panic, drain and later re-enabling. A deliberately changed phase increment was rejected as a negative control.
+
+Finish compilation and fidelity checks before timing. The benchmark uses fixed matched warmups and at least ten alternating pairs; CPU and elapsed totals, p95, maxima and process high-water memory remain separate. Investigate repeatable total regressions above 2% or p95 regressions above 5%. Short-process or single-kernel gains do not establish whole-app performance. The Android producer harness exercises the actual JNI publication with supplied JVM array accessors, so its numbers exclude Java validation and VM allocation time.
+
+Full-score producers reserve a free bank without copying the previous score. Generic partial-bank callers still inherit the latest accepted bank, and publication retains its ownership, validation and mailbox checks. The iOS producer commits an already prepared score once; Android prepares its complete packet at native publication. Empty completion polls and empty metadata pruning avoid transient objects. Accepted edits of unknown iOS IDs do not create retained spatial metadata. Sequence capacity, diagnostics, event delivery cadence and public defaults are unchanged.
+
 The shared processor check is `cc -std=c99 -O2 -Wall -Wextra -Wpedantic tests/spatial_regression.c -lm -o /tmp/spatial_regression` followed by `/tmp/spatial_regression`. `tests/spatial_engine_host.cpp` uses the same compile flags as `engine_render_host.cpp` and verifies native left/right rendering, elevation changes, stealing and stopping. Java spatial validation is checked by `SynthSpatialContractRegression`; the common Java/iOS corpus also covers spatial acceptance and conflicts.
 
 ### Reproduce a host CPU comparison
