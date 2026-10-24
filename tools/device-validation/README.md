@@ -1,6 +1,6 @@
 # Physical validation diagnostics
 
-These tools run an isolated app without changing Studio's presets or preferences. Raw device reports belong outside the repository, for example `/tmp/tisynth-physical/ipad`.
+These tools run an isolated app without changing Studio's presets or preferences. Keep final raw device reports in one durable evidence directory outside the repository. Reuse a single temporary staging directory for builds and installations; remove regenerable output after preserving verified packages and results.
 
 `ios/app.js` runs the real module API with 32 shared square voices, four looping eight-note sequences, binaural FIR, two active LFOs and chorus/delay/reverb/saturation. Voice volume is 0.01 and master volume 0.15. A 15-second warmup precedes statistics reset and at least 600 seconds of counted audio callbacks. A later phase publishes four complete 512-step, 32-note scores repeatedly, then measures shutdown/restart. The final button plays a quiet native phrase for listening; audible acceptance remains a separate human decision.
 
@@ -32,7 +32,7 @@ The `physical_stats_benchmark.c` microbenchmark compares statistics publication 
 
 ## Idle and bypass screen
 
-`ios/bypass.js` runs silence, one held stereo voice, 32 held stereo voices and 32 held binaural voices with default effects/LFOs off. Use identical reference/candidate diagnostic modules with an explicit rate preference. Each phase warms for ten seconds, then counts at least thirty seconds of actual audio before freezing its histogram. Voice counts and actual source/session/output rates must match; pause invalidates the run. Preserve callback time, memory and route/volume separately. This screen does not replace the ten-minute full-effects criterion or bit-exact host comparison. It writes `bypass-report.json`.
+`ios/bypass.js` runs silence, one held stereo voice, 32 held stereo voices and 32 held binaural voices with default effects/LFOs off. Use identical reference/candidate diagnostic modules with an explicit rate preference. Each phase warms for ten seconds, then counts at least thirty seconds of actual audio before freezing its histogram. Voice counts and actual source/session/output rates must match; pause invalidates the run. Preserve callback time, memory and route/volume separately. The 32 sine voices use semitone-spaced frequencies, so audible beating is possible without an active LFO. Stereo phases are centered; the binaural phase deliberately uses `spatialX: 0.6, spatialY: -0.4`, toward the right. Record listening observations separately from render-time regressions. This screen does not replace the ten-minute full-effects criterion or bit-exact host comparison. It writes `bypass-report.json`.
 
 ## Compact memory protocol
 

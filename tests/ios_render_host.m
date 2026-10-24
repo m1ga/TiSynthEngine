@@ -83,7 +83,7 @@ static void sequence(RenderRig *r,int id,int mode,BOOL spatial,BOOL fx) {
  assert(synth_transport_commit(r->sequence,c,1));
 }
 static void fixtures(void) {
- const int rates[]={16000,44100,48000,96000,192000},sizes[]={0,1,3,4,7,8,9,15,16,17,23,31,256};
+ const int rates[]={16000,44100,48000,96000,192000},sizes[]={0,1,3,4,7,8,9,15,16,17,23,31,256,512,1024};
  for(unsigned rate=0;rate<5;rate++)for(int kind=0;kind<24;kind++) {
   @autoreleasepool {
   RenderRig *r=rig(rates[rate]);BOOL spatial=kind&1,held=kind>=4,fx=kind>=8;
@@ -97,7 +97,7 @@ static void fixtures(void) {
     for(int j=0;j<2;j++){c.modulation.lfo[j].enabled=1;c.modulation.lfo[j].depth=.2;c.modulation.lfo[j].rateHz=2+j;c.modulation.lfo[j].waveform=j;c.modulation.lfo[j].target=c.waveType==0?2:c.waveType==1?1:0;}}
    assert(![r enqueueCommand:c]);
   }
-  uint64_t pcm=1469598103934665603ULL,states=pcm;float output[512]={0};
+  uint64_t pcm=1469598103934665603ULL,states=pcm;float output[2048]={0};
   for(int block=0;block<180;block++) {
    if(block==35&&held) {SynthCommand c={0};c.type=SYNTH_CMD_HELD_UPDATE;c.voiceId=1;c.voiceGeneration=1;c.liveMask=(1u<<LIVE_VOLUME)|(1u<<LIVE_FREQUENCY);c.liveValues[LIVE_VOLUME]=.02;c.liveValues[LIVE_FREQUENCY]=440;
     c.hasSendUpdate=YES;c.effectSend=.63;
@@ -110,18 +110,18 @@ static void fixtures(void) {
    if(block==85&&held)for(int i=0;i<32;i++){SynthCommand c={0};c.type=SYNTH_CMD_HELD_OFF;c.voiceId=i+1;c.voiceGeneration=i<8?i+101:i+1;assert(![r enqueueCommand:c]);}
    if(block==100&&fx){SynthCommand c={0};c.type=7;c.processing=synth_effects_default_config();assert(![r enqueueCommand:c]);}
    if(block==120){SynthCommand c={0};c.type=CMD_STOP_ALL;assert(![r enqueueCommand:c]);}
-   int count=sizes[block%13],layout=block%3;memset(output,0,sizeof(output));render(r,count,output,layout);
+   int count=sizes[block%(sizeof(sizes)/sizeof(sizes[0]))],layout=block%3;memset(output,0,sizeof(output));render(r,count,output,layout);
    pcm=hashBytes(pcm,output,(layout==2?count:count*2)*sizeof(float));
    if(block%15==0||block==179){uint64_t state=stateHash(r);HASH(states,state);}
   }
   if(fx) {
    // Reach the quiet FX state after panic, then enable processing again. A
    // bypass may neither freeze hidden ramps nor leave stale history behind.
-   for(int frame=0;frame<(int)(r->engineSampleRate*.25);frame+=256){render(r,256,output,0);pcm=hashBytes(pcm,output,sizeof(output));}
+   for(int frame=0;frame<(int)(r->engineSampleRate*.25);frame+=256){render(r,256,output,0);pcm=hashBytes(pcm,output,256*2*sizeof(float));}
    uint64_t state=stateHash(r);HASH(states,state);
    SynthCommand processing={0};processing.type=7;processing.processing=synth_effects_default_config();processing.processing.inputGain=1.2;processing.processing.chorus.enabled=1;
    assert(![r enqueueCommand:processing]);SynthCommand c=tone(r,0,1,spatial,YES);c.effectSend=.27;assert(![r enqueueCommand:c]);
-   for(int block=0;block<6;block++){render(r,256,output,0);pcm=hashBytes(pcm,output,sizeof(output));}
+   for(int block=0;block<6;block++){render(r,256,output,0);pcm=hashBytes(pcm,output,256*2*sizeof(float));}
    state=stateHash(r);HASH(states,state);
   }
   printf("rate=%d kind=%d pcm=%016llx state=%016llx\n",rates[rate],kind,(unsigned long long)pcm,(unsigned long long)states);
@@ -130,23 +130,28 @@ static void fixtures(void) {
  }
 }
 static int cmpDouble(const void *a,const void *b){double x=*(const double*)a,y=*(const double*)b;return (x>y)-(x<y);}
-static void benchmark(int kind,int loops) {
+static void benchmark(int kind,int loops,int frames) {
+ assert(frames>=1&&frames<=1024);BOOL heldSine=kind==8||kind==9;
  RenderRig *r=rig(48000);BOOL spatial=kind&1;int voices=kind<2?0:kind<4?1:32;
- if(kind>=6)for(int id=1;id<=4;id++)sequence(r,id,0,spatial,YES);
- else for(int i=0;i<voices;i++){SynthCommand c=tone(r,i,1,spatial,YES);assert(![r enqueueCommand:c]);}
- if(kind>=6){SynthCommand c={0};c.type=7;c.processing=synth_effects_default_config();c.processing.chorus.enabled=c.processing.delay.enabled=c.processing.reverb.enabled=c.processing.saturation.enabled=1;assert(![r enqueueCommand:c]);}
+ if(kind>=6&&!heldSine)for(int id=1;id<=4;id++)sequence(r,id,0,spatial,YES);
+ else for(int i=0;i<voices;i++){SynthCommand c=tone(r,i,1,spatial,YES);
+  if(heldSine){c=(SynthCommand){0};c.type=SYNTH_CMD_HELD_ON;c.voiceId=i+1;c.voiceGeneration=i+1;c.frequency=220*pow(2,i/12.0);c.attackSamples=MsToSamples(2,r->engineSampleRate);c.releaseSamples=MsToSamples(30,r->engineSampleRate);c.sustain=1;c.volume=.01;c.eventVoiceCount=1;c.waveType=0;c.pulseWidth=.5;c.spatial=spatial;c.spatialX=.6;c.spatialY=-.4;c.effectSend=-1;c.bus=1;}
+  assert(![r enqueueCommand:c]);}
+ if(heldSine)atomic_store(&r->masterVolume,.15);
+ if(kind>=6&&!heldSine){SynthCommand c={0};c.type=7;c.processing=synth_effects_default_config();c.processing.chorus.enabled=c.processing.delay.enabled=c.processing.reverb.enabled=c.processing.saturation.enabled=1;assert(![r enqueueCommand:c]);}
  // Fixed per-scenario warmups are identical for the paired binaries. Thirty
  // idle blocks were too short to warm a process before a millisecond trial.
  int warmBlocks=kind==0?10000:kind==2?8000:kind==3?2000:kind==4?1000:kind==6?512:256;
- float output[512];for(int n=0;n<warmBlocks;n++)render(r,256,output,0);
+ if(heldSine)warmBlocks=(48000*10+frames-1)/frames;
+ float output[2048];for(int n=0;n<warmBlocks;n++)render(r,frames,output,0);
  double *wall=calloc(loops,sizeof(double)),*cpu=calloc(loops,sizeof(double)),wallTotal=0,cpuTotal=0;
  for(int n=0;n<loops;n++) {
-  double c=seconds(CLOCK_THREAD_CPUTIME_ID),w=seconds(CLOCK_MONOTONIC);render(r,256,output,0);
+  double c=seconds(CLOCK_THREAD_CPUTIME_ID),w=seconds(CLOCK_MONOTONIC);render(r,frames,output,0);
   wall[n]=seconds(CLOCK_MONOTONIC)-w;cpu[n]=seconds(CLOCK_THREAD_CPUTIME_ID)-c;wallTotal+=wall[n];cpuTotal+=cpu[n];
  }
  qsort(wall,loops,sizeof(double),cmpDouble);qsort(cpu,loops,sizeof(double),cmpDouble);
  struct rusage usage;getrusage(RUSAGE_SELF,&usage);
- printf("{\"kind\":%d,\"blocks\":%d,\"warmupBlocks\":%d,\"wallSeconds\":%.9g,\"cpuSeconds\":%.9g,\"wallP95\":%.9g,\"cpuP95\":%.9g,\"wallMax\":%.9g,\"cpuMax\":%.9g,\"peakRssBytes\":%ld}\n",kind,loops,warmBlocks,wallTotal,cpuTotal,wall[(loops*95-1)/100],cpu[(loops*95-1)/100],wall[loops-1],cpu[loops-1],usage.ru_maxrss);
+ printf("{\"kind\":%d,\"blocks\":%d,\"warmupBlocks\":%d,\"framesPerBlock\":%d,\"wallSeconds\":%.9g,\"cpuSeconds\":%.9g,\"wallP95\":%.9g,\"cpuP95\":%.9g,\"wallMax\":%.9g,\"cpuMax\":%.9g,\"peakRssBytes\":%ld}\n",kind,loops,warmBlocks,frames,wallTotal,cpuTotal,wall[(loops*95-1)/100],cpu[(loops*95-1)/100],wall[loops-1],cpu[loops-1],usage.ru_maxrss);
  free(wall);free(cpu);destroyRig(r);
 }
 static void pruneBenchmark(int loops) {
@@ -201,5 +206,5 @@ int main(int argc,char **argv) {@autoreleasepool {
  else if(argc>1&&!strcmp(argv[1],"--metadata"))metadataRegression();
  else if(argc>1&&atoi(argv[1])==-1)pruneBenchmark(argc>2?atoi(argv[2]):100000);
  else if(argc>1&&atoi(argv[1])==-2)producerBenchmark(argc>2?atoi(argv[2]):1,argc>3?atoi(argv[3]):100);
- else if(argc>1)benchmark(atoi(argv[1]),argc>2?atoi(argv[2]):2000);else fixtures();
+ else if(argc>1)benchmark(atoi(argv[1]),argc>2?atoi(argv[2]):2000,argc>3?atoi(argv[3]):256);else fixtures();
  }return 0;}

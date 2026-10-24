@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--mode", choices=["render", "producer", "android-producer", "prune"], default="render")
     parser.add_argument("--label", default="candidate")
     parser.add_argument("--case", type=int, action="append", help="Narrow a render kind or producer step count")
+    parser.add_argument("--frames", type=int, default=256, help="Render frames per block; requires matching host support above 256")
     parser.add_argument("--blocks", type=int, default=1000)
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--output", type=Path, required=True)
@@ -29,15 +30,17 @@ def main():
         parser.error("At least ten alternating pairs are required")
     if args.blocks < 1:
         parser.error("Positive block count required")
+    if not 1 <= args.frames <= 1024 or (args.mode != "render" and args.frames != 256):
+        parser.error("Render block size must be 1..1024; other modes use the default")
     cases = []
     if args.mode == "render":
-        cases = [[str(kind), str(args.blocks)] for kind in (args.case or [0, 2, 3, 4, 5, 6, 7])]
+        cases = [[str(kind), str(args.blocks), str(args.frames)] for kind in (args.case or [0, 2, 3, 4, 5, 6, 7])]
     elif args.mode in ["producer", "android-producer"]:
         cases = [(["-2"] if args.mode == "producer" else []) + [str(steps), "100"] for steps in (args.case or [1, 512])]
     else:
         cases = [["-1", "100000"]]
     report = {"scope": "Apple ObjC renderer/producer and Android JNI producer on an ARM64 macOS host; no device acceptance or Java VM timing",
-              "createdUnix": time.time(), "runs": args.runs, "physicalAcceptance": False, "cases": []}
+              "createdUnix": time.time(), "runs": args.runs, "physicalAcceptance": False, "framesPerBlock": args.frames if args.mode == "render" else None, "cases": []}
     binaries = {"baseline": args.baseline.resolve(), "candidate": args.candidate.resolve()}
     report["mode"] = args.mode
     report["binaries"] = {mode: hashlib.sha256(path.read_bytes()).hexdigest() for mode, path in binaries.items()}
@@ -50,11 +53,13 @@ def main():
                 assert hashlib.sha256(binary.read_bytes()).hexdigest() == report["binaries"][mode]
                 command = [str(binary)] + inputs
                 row = json.loads(subprocess.check_output(command, text=True))
+                if args.mode == "render":
+                    assert row.get("framesPerBlock", 256) == args.frames, "Host ignores requested frame count"
                 if pair:
                     trials[mode].append(row)
         if "state" in trials["baseline"][0]:
             assert len({r["state"] for rows in trials.values() for r in rows}) == 1, "Producer state differs"
-        keys = [key for key in trials["baseline"][0] if key not in ["kind", "blocks", "warmupBlocks", "steps", "loops", "state"]]
+        keys = [key for key in trials["baseline"][0] if key not in ["kind", "blocks", "warmupBlocks", "framesPerBlock", "steps", "loops", "state"]]
         medians = {mode: {k: statistics.median(r[k] for r in rows) for k in keys} for mode, rows in trials.items()}
         change = {k: 100 * (medians["candidate"][k] / medians["baseline"][k] - 1)
                   for k in keys if medians["baseline"][k] and k not in ["retainedAllocationBlocks", "retainedAllocationBytes"]}
