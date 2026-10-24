@@ -13,7 +13,12 @@ static void test_delay_tail(void) {
     double first=0,second=0;
     for(int i=1;i<80000;i++) {
         l=r=0;synth_effects_process(&fx,120,&l,&r);
-        if(i==32000)first=l;if(i==64000)second=r;
+        if(i==32000) {
+            first=l;
+        }
+        if(i==64000) {
+            second=r;
+        }
     }
     assert(fabs(first-1)<1e-9&&fabs(second-.8)<1e-9);
     synth_effects_panic(&fx);
