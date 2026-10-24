@@ -28,6 +28,7 @@ jobs:
           node tests/api_contract_regression.js
           node tests/default_profile_regression.js
           node tests/physical_rate_regression.js
+          node tests/physical_bypass_regression.js
           node tests/documentation_regression.js
           node --test tests/example_app_regression.js
 

@@ -11,9 +11,24 @@ var label = Ti.UI.createLabel({ color: '#ffffff', text: 'Physical audio acceptan
 win.add(label)
 var file = Ti.Filesystem.getFile(Ti.Filesystem.applicationDataDirectory, 'physical-report.json')
 function writeReport (stage) { report.stage = stage; file.write(JSON.stringify(report)); Ti.API.info('SYNTH_PHYSICAL ' + JSON.stringify(report)) }
-function fail (message) { report.failure = message; writeReport('failed'); label.text = message; synth.shutdown() }
+var invalid = false, completed = false, pressureTimer
+function later (callback, delay) { return setTimeout(function () { if (!invalid) callback() }, delay) }
+function fail (message) {
+  if (invalid || completed) return
+  invalid = true; clearInterval(timer); clearInterval(pressureTimer)
+  report.failure = message; report.renderTimingPassed = false; report.renderBoundPassed = false
+  writeReport('failed'); label.text = message; synth.shutdown()
+}
+function validFormats (stats) {
+  var rate = report.preferredSampleRateRequest ? report.preferredSampleRateRequest.requested : report.feasibility.sampleRate
+  var session = stats.physicalAudioSession
+  return session && stats.sampleRate === rate && session.sessionSampleRate === rate && session.sourceNodeSampleRate === rate && session.outputNodeSampleRate === rate
+}
+function routeSignature (session) { return JSON.stringify(session.ports.map(function (port) { return [port.type, port.name] })) }
+
 var ids = []
 function begin () {
+  if (invalid) return
   var baseline = synth.getStats({ physicalMemory: true })
   report.preferredSampleRateRequest = baseline.physicalPreferredSampleRateRequest || null
   if (report.preferredSampleRateRequest && !report.preferredSampleRateRequest.accepted) return fail('Preferred sample rate request rejected')
@@ -39,18 +54,15 @@ function begin () {
   report.warmupStartedAt = new Date().toISOString()
   label.text = '32 voices / 4 sequences\nWarming up 15 seconds'
   writeReport('warmup')
-  setTimeout(measure, 15000)
+  later(measure, 15000)
 }
 var timer
 function measure () {
+  if (invalid) return
   var feasibility = synth.getStats({ physicalMemory: true })
   report.feasibility = feasibility
   if (!feasibility.physicalTelemetry || feasibility.physicalTelemetry.callbacks < 100) return fail('physical telemetry missing')
-  if (report.preferredSampleRateRequest) {
-    var requestedRate = report.preferredSampleRateRequest.requested
-    var session = feasibility.physicalAudioSession
-    if (!session || feasibility.sampleRate !== requestedRate || session.sessionSampleRate !== requestedRate || session.sourceNodeSampleRate !== requestedRate || session.outputNodeSampleRate !== requestedRate) return fail('Requested sample rate unavailable on this route')
-  }
+  if (!validFormats(feasibility)) return fail('Requested sample rate unavailable on this route')
   if (feasibility.activeVoices !== 32 || ids.some(function (id) { return !synth.getSequenceState({ sequenceId: id }) })) return fail('full load not active')
   synth.resetStats()
   var started = Date.now()
@@ -59,8 +71,10 @@ function measure () {
   label.text = 'Controlled ten-minute load\nDo not interact with this iPad'
   writeReport('measuring')
   timer = setInterval(function () {
+    if (invalid) return
     var elapsed = Date.now() - started
     var stats = synth.getStats()
+    if (stats.sampleRate !== feasibility.sampleRate || stats.callbackFrames !== feasibility.callbackFrames) return fail('Observed sample rate or callback size changed')
     var telemetry = stats.physicalTelemetry
     stats.physicalTelemetry = { callbacks: telemetry.callbacks, renderedFrames: telemetry.renderedFrames, p95Upper: telemetry.p95Upper, deadlineMisses: telemetry.deadlineMisses, frozen: telemetry.frozen }
     report.observations.push({ elapsedMs: elapsed, stats: stats, positions: ids.map(function (id) { return synth.getSequenceState({ sequenceId: id }) }) })
@@ -68,7 +82,7 @@ function measure () {
     if (elapsed >= 600000 && stats.physicalTelemetry.renderedFrames / stats.sampleRate >= 600) {
       clearInterval(timer)
       synth.getStats({ physicalFreeze: true })
-      setTimeout(function () { finishMeasurement(started) }, 100)
+      later(function () { finishMeasurement(started) }, 100)
     } else if (report.observations.length % 10 === 0) {
       label.text = 'Controlled load: ' + Math.floor(elapsed / 1000) + ' / 600 seconds\n32 voices / 4 sequences'
       writeReport('measuring')
@@ -76,8 +90,13 @@ function measure () {
   }, 1000)
 }
 function finishMeasurement (started) {
+  if (invalid) return
       var elapsed = Date.now() - started
       var stats = synth.getStats({ physicalMemory: true })
+      if (!validFormats(stats) || stats.callbackFrames !== report.feasibility.callbackFrames) return fail('Final audio formats changed')
+      var beforeSession = report.feasibility.physicalAudioSession
+      var afterSession = stats.physicalAudioSession
+      if (routeSignature(beforeSession) !== routeSignature(afterSession) || beforeSession.systemOutputVolume !== afterSession.systemOutputVolume || beforeSession.ioBufferDuration !== afterSession.ioBufferDuration) return fail('Route, volume or buffer changed')
       report.finalTelemetry = stats.physicalTelemetry
       report.fullLoadProcessMemory = stats.physicalProcessMemory
       report.fullLoadAudioSession = stats.physicalAudioSession
@@ -94,23 +113,24 @@ function finishMeasurement (started) {
       report.systemAvailableMemoryAfterLoad = Ti.Platform.availableMemory
       report.rejections = stats.rejectedRequestsByReason
       synth.stopAll()
-      setTimeout(function () {
+      later(function () {
         report.afterPanic = synth.getStats()
         report.systemAvailableMemoryAfterPanic = Ti.Platform.availableMemory
         label.text = 'Ten-minute run finished\n' + (report.renderBoundPassed ? 'Render p95 upper bound below 50%' : 'Render acceptance requires detailed review')
         writeReport('timed-load-completed')
-        setTimeout(memoryPressure, 3000)
+        later(memoryPressure, 3000)
       }, 2000)
 }
 win.addEventListener('open', function () {
   writeReport('baseline-ready')
   label.text = 'Baseline ready\nStarting load in 5 seconds'
-  setTimeout(begin, 5000)
+  later(begin, 5000)
 })
-Ti.App.addEventListener('pause', function () { report.backgroundedAt = new Date().toISOString(); writeReport('interrupted-background') })
+Ti.App.addEventListener('pause', function () { if (!completed) { report.backgroundedAt = new Date().toISOString(); fail('App paused during controlled validation') } })
 win.open()
 
 function memoryPressure () {
+  if (invalid) return
   var steps = []
   for (var i = 0; i < 512; i++) {
     var notes = []
@@ -122,29 +142,32 @@ function memoryPressure () {
   report.memoryPressure = { stepsPerSequence: 512, notesPerStep: 32, sequences: pressureIds, acceptedEdits: 0, rejectedEdits: 0 }
   writeReport('high-density-publication')
   var count = 0
-  var pressure = setInterval(function () {
+  pressureTimer = setInterval(function () {
+    if (invalid) return
     pressureIds.forEach(function (id) {
       if (synth.updateSequence({ sequenceId: id, steps: steps })) report.memoryPressure.acceptedEdits++
       else report.memoryPressure.rejectedEdits++
     })
     if (++count >= 30) {
-      clearInterval(pressure)
+      clearInterval(pressureTimer)
       synth.stopAll()
-      setTimeout(function () {
+      later(function () {
         report.memoryPressure.preShutdownMemory = synth.getStats({ physicalMemory: true }).physicalProcessMemory
         synth.shutdown()
         report.memoryPressure.postPressureMemory = synth.getStats({ physicalMemory: true }).physicalProcessMemory
         report.memoryPressure.finishedAt = new Date().toISOString()
         writeReport('memory-shutdown')
-        setTimeout(function () {
+        later(function () {
           report.recoveryRestartAccepted = synth.start({ maxVoices: 32, maxSequences: 4, audioSession: 'playback' })
+          if (!report.recoveryRestartAccepted) return fail('Recovery restart rejected')
           report.memoryPressure.restartMemory = synth.getStats({ physicalMemory: true }).physicalProcessMemory
           writeReport('memory-restart')
-          setTimeout(function () {
+          later(function () {
             synth.shutdown()
             report.memoryPressure.finalShutdownMemory = synth.getStats({ physicalMemory: true }).physicalProcessMemory
             label.text = 'Physical run finished.\nReports saved. Listening control ready.'
             listen.enabled = true
+            completed = true
             writeReport('completed')
           }, 30000)
         }, 30000)

@@ -30,6 +30,14 @@ Build the temporary iOS module, copy its framework into a newly created Classic 
 
 The `physical_stats_benchmark.c` microbenchmark compares statistics publication overhead on a host. It does not measure device render overhead or establish device audio deadlines.
 
+## Idle and bypass screen
+
+`ios/bypass.js` runs silence, one held stereo voice, 32 held stereo voices and 32 held binaural voices with default effects/LFOs off. Use identical reference/candidate diagnostic modules with an explicit rate preference. Each phase warms for ten seconds, then counts at least thirty seconds of actual audio before freezing its histogram. Voice counts and actual source/session/output rates must match; pause invalidates the run. Preserve callback time, memory and route/volume separately. This screen does not replace the ten-minute full-effects criterion or bit-exact host comparison. It writes `bypass-report.json`.
+
+## Compact memory protocol
+
+`ios/memory.js` runs the full 32-voice/four-sequence binaural/effects/LFO load, 120 dense score edits and shutdown/restart with statistics polled at 5 Hz. It retains bounded stage snapshots rather than per-poll history and never logs the whole report. Compare both revisions with the same explicit rate preference. `memory-report.json` separates whole-process charged footprint and resident high-water from native buffer accounting; neither the compact test nor a 192 kHz projection substitutes for physical output at that rate.
+
 ## Controlled recovery and listening
 
 `ios/recovery.js` is a separate short runner. Its private option pauses AVAudioEngine and invokes the unchanged production `resumeAudioEngineAfterRouteChange` helper. It checks ten resumptions, retained transport/effect allocation, active sequence states and process high-water footprint. This is controlled software stream recovery; it does not simulate a hardware route change. It writes `recovery-report.json` without overwriting the completed ten-minute report.
