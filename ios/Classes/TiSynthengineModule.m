@@ -1464,7 +1464,20 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
       BOOL isInterleaved = (outR == NULL && outputData->mBuffers[0].mNumberChannels >= 2);
 
       double mv = atomic_load_explicit(&module->masterVolume, memory_order_relaxed);
+      // These states cannot advance while every processor and gain ramp is idle.
+      const SynthEffects *fx=&module->effects;
+      BOOL bypassEffects=fx->config.inputGain==1 && fx->current.inputGain==1 &&
+        !fx->config.chorus.enabled && !fx->config.delay.enabled && !fx->config.reverb.enabled &&
+        !fx->config.saturation.enabled && !fx->chorusGate.active && !fx->delayGate.active &&
+        !fx->reverbGate.active && fx->saturationSend==0;
 
+
+      BOOL spatialBlocks=NO;
+#if SYNTH_SPATIAL_TIME_BLOCKS
+      spatialBlocks=module->stats.spatial>0;
+      if(!spatialBlocks&&module->stats.tails>0)for(int i=0;i<module->engineMaxVoices;i++)if(module->tails[i].isActive&&module->tails[i].spatial){spatialBlocks=YES;break;}
+#endif
+      if(!spatialBlocks) {
       for (AVAudioFrameCount frame = 0; frame < frameCount; frame++) {
         if (mv != module->masterGainTarget) {
           module->masterGainTarget = mv;
@@ -1499,7 +1512,7 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
             continue;
           }
 
-          if(v->held.voiceId) {
+          if(v->held.voiceId && (v->live.activeMask || v->samplesPlayed==0 || v->sequenceGeneration)) {
             synth_live_tick(&v->live); const double *live=v->live.value;
             v->phaseIncrement=live[LIVE_FREQUENCY]/module->engineSampleRate;
             v->volume=live[LIVE_VOLUME]*v->eventGain;
@@ -1696,7 +1709,10 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
         double delayedL = module->lookaheadL[laIdx];
         double delayedR = module->lookaheadR[laIdx];
         double scaledL,scaledR;
-        synth_effects_process_routed(&module->effects,module->sequence->bpm,mixL,mixR,selectedL,selectedR,module->smoothedMasterGain,&scaledL,&scaledR);
+        if(bypassEffects) {
+          double processedL=selectedL*module->smoothedMasterGain,processedR=selectedR*module->smoothedMasterGain;
+          scaledL=processedL+mixL*module->smoothedMasterGain;scaledR=processedR+mixR*module->smoothedMasterGain;
+        } else synth_effects_process_routed(&module->effects,module->sequence->bpm,mixL,mixR,selectedL,selectedR,module->smoothedMasterGain,&scaledL,&scaledR);
         synth_transport_advance_sample(module->sequence);
         module->lookaheadL[laIdx] = scaledL;
         module->lookaheadR[laIdx] = scaledR;
@@ -1795,6 +1811,391 @@ static SynthCommand StudioSequenceCommand(const SynthSequenceVoice *v,double rat
           outL[frame] = fL;
         }
       }
+      } else {
+      // Spatial helpers stay on the stack and never escape this callback.
+      // Stereo retains its original loop to avoid per-voice call overhead.
+      void (^ __unsafe_unretained voiceSample)(int,double,double,float *,double *,double *,double *,double *,double *) = ^(int i,double nowBeat,double nowMs,float *mono,double *sendOut,double *mixL,double *mixR,double *selectedL,double *selectedR) {
+
+          SynthVoice *v = &module->voices[i];
+          if (!v->isActive) return;
+          double send=synth_send_tick(&v->send);
+          if(v->sequenceGeneration && !v->held.releasing && ((v->sequenceTimeUnit==SYNTH_SEQUENCE_MS?nowMs:nowBeat)+1e-10>=v->sequenceOffBeat))synth_held_release(&v->held,v->currentEnvelope);
+          if (v->spatial && v->samplesPlayed >= v->totalSamples) {
+            if(mono){*mono=0;*sendOut=send;}else{
+            float l, r;
+            synth_spatial_process(&v->spatialState, 0, &l, &r);
+            (*mixL) += l*(1-send); (*mixR) += r*(1-send);(*selectedL)+=l*send;(*selectedR)+=r*send;
+            }
+            if (--v->spatialDrain <= 0) { v->isActive = false; synth_stats_voice_end(&module->stats,true); }
+            return;
+          }
+
+          if(v->held.voiceId && (v->live.activeMask || v->samplesPlayed==0 || v->sequenceGeneration)) {
+            synth_live_tick(&v->live); const double *live=v->live.value;
+            v->phaseIncrement=live[LIVE_FREQUENCY]/module->engineSampleRate;
+            v->volume=live[LIVE_VOLUME]*v->eventGain;
+            v->lfoPhaseIncrement=live[LIVE_LFO_FREQ]/module->engineSampleRate; v->lfoDepth=live[LIVE_LFO_DEPTH];
+            v->noisePhaseIncrement=live[LIVE_NOISE_RATE];v->filterAlpha=live[LIVE_LOWPASS_HZ]>=1?0:live[LIVE_LOWPASS_HZ];
+            if(v->pan!=live[LIVE_PAN]){v->pan=live[LIVE_PAN];[module updatePanGainsForVoice:v];}
+            v->pulseWidth=live[LIVE_PULSE_WIDTH]; v->fmRatio=live[LIVE_FM_RATIO]; v->fmDepth=live[LIVE_FM_DEPTH];
+            if(v->svf.type && (v->live.remaining[LIVE_FILTER_HZ]>0 || v->live.remaining[LIVE_FILTER_Q]>0 || v->svfHz!=live[LIVE_FILTER_HZ] || v->svfQ!=live[LIVE_FILTER_Q])) {
+              v->svfHz=live[LIVE_FILTER_HZ]; v->svfQ=live[LIVE_FILTER_Q];
+              if(!v->modulating)synth_filter_set(&v->svf,v->svfHz,v->svfQ,module->engineSampleRate);
+            }
+          }
+
+          if(v->sequenceGeneration) {
+            double clock=v->sequenceTimeUnit==SYNTH_SEQUENCE_MS?nowMs:nowBeat;
+            double progress=ClampDouble((clock-v->sequenceStartClock)/fmax(v->sequenceLength,1e-10),0,1);
+            const double *base=v->live.value;
+            if(v->sequenceFrequencyEnd>=1)v->phaseIncrement=(base[LIVE_FREQUENCY]+(v->sequenceFrequencyEnd-base[LIVE_FREQUENCY])*progress)/module->engineSampleRate;
+            if(v->sequenceNoiseEnd>=1)v->noisePhaseIncrement=base[LIVE_NOISE_RATE]+(v->sequenceNoiseEnd/module->engineSampleRate-base[LIVE_NOISE_RATE])*progress;
+            if(v->sequencePulseEnd>=.05)v->pulseWidth=base[LIVE_PULSE_WIDTH]+(v->sequencePulseEnd-base[LIVE_PULSE_WIDTH])*progress;
+            if(v->sequenceFMSweep)v->fmDepth=base[LIVE_FM_DEPTH]+(v->sequenceFMEnd-base[LIVE_FM_DEPTH])*progress;
+            double pan=base[LIVE_PAN]+(v->sequencePanEnd-base[LIVE_PAN])*progress;if(pan!=v->pan){v->pan=pan;[module updatePanGainsForVoice:v];}
+          }
+
+          // --- LFO vibrato ---
+          double effectivePhaseIncr = v->phaseIncrement;
+          if (v->lfoDepth > 0.0) {
+            double lfoSample = sin(v->lfoPhase * 2.0 * M_PI);
+            effectivePhaseIncr += lfoSample * v->lfoDepth / module->engineSampleRate;
+            v->lfoPhase += v->lfoPhaseIncrement;
+            if (v->lfoPhase >= 1.0) v->lfoPhase -= 1.0;
+          }
+
+          BOOL processingModulation=v->modulating;
+          SynthModulationOutput mod={0,0,0};
+          if(v->modulating){mod=synth_modulation_tick(&v->modulation,module->sequence->bpm);v->modulating=synth_modulation_is_active(&v->modulation);}
+          double modPulse=v->modulating?synth_modulation_pwm(v->pulseWidth,mod.pwmOffset):v->pulseWidth;
+          double modFM=v->modulating?synth_modulation_fm(v->fmDepth,mod.fmOffset):v->fmDepth;
+          // --- Waveform generation ---
+          effectivePhaseIncr = ClampDouble(effectivePhaseIncr, -0.45, 0.45);
+          double wf = 0.0;
+          if (v->waveType == 4) {
+            v->noisePhase += ClampDouble(v->noisePhaseIncrement, 1.0e-9, 1.0);
+            if (v->noisePhase >= 1.0) {
+              v->noisePhase -= floor(v->noisePhase);
+              v->heldNoise = LcgNoise(&v->noiseState);
+            }
+            wf = v->heldNoise;
+          } else if (v->waveType == 5) {
+            wf = RenderWavetable(v->phase, v->wavetable, v->wavetableSize);
+          } else if (v->fmActive) {
+            wf = synth_fm_sine(v->phase - floor(v->phase), v->fmModPhase, modFM);
+          } else {
+            wf = RenderPeriodicWave(v->waveType, v->phase, effectivePhaseIncr,
+                                    modPulse);
+          }
+          wf = QuantizeWave(wf, v->bitDepth);
+          if (v->filterAlpha > 0.0) {
+            v->filterState += v->filterAlpha * (wf - v->filterState);
+            wf = v->filterState;
+          }
+          if (v->svf.type != SYNTH_FILTER_NONE) {
+            if(v->sequenceGeneration&&v->svfSweeping) {
+              if((v->modulationFrames++&7)==0) {
+                double clock=v->sequenceTimeUnit==SYNTH_SEQUENCE_MS?nowMs:nowBeat;
+                double progress=ClampDouble((clock-v->sequenceStartClock)/fmax(v->sequenceLength,1e-10),0,1);
+                double cutoff=progress>=1?v->svfHzEnd:synth_geometric_at(v->live.value[LIVE_FILTER_HZ],v->svfHzEnd,progress);
+                if(processingModulation)cutoff=synth_modulation_cutoff(cutoff,mod.cutoffOctaves,module->engineSampleRate);
+                synth_filter_set(&v->svf,cutoff,v->svfQ,module->engineSampleRate);
+              }
+            } else {
+            if(processingModulation && ((v->modulationFrames++&15)==0||!v->modulating))synth_filter_set(&v->svf,synth_modulation_cutoff(v->svfHz,mod.cutoffOctaves,module->engineSampleRate),v->svfQ,module->engineSampleRate);
+            if (!v->modulating && synth_filter_update_due(v->svfSweeping, v->sequenceGeneration?(int)v->modulationFrames++:v->samplesPlayed)) {
+              double cutoffHz = v->svfSweeping
+                  ? synth_geometric_at(v->svfHz, v->svfHzEnd,
+                                       (v->sequenceGeneration?ClampDouble(((v->sequenceTimeUnit==SYNTH_SEQUENCE_MS?nowMs:nowBeat)-v->sequenceStartClock)/fmax(v->sequenceLength,1e-10),0,1):synth_sweep_progress(v->samplesPlayed, v->totalSamples)))
+                  : v->svfHz;
+              synth_filter_set(&v->svf, cutoffHz, v->svfQ, module->engineSampleRate);
+            }
+            }
+            wf = synth_filter_process(&v->svf, wf);
+          }
+
+          // --- Envelope (smoothstep attack, decay to sustain, release) ---
+          double envelope = v->held.voiceId ? synth_held_envelope(&v->held,v->samplesPlayed,v->attackSamples,v->decaySamples,v->sustain,v->releaseSamples) : synth_envelope(v->samplesPlayed, v->totalSamples,
+                                           v->attackSamples, v->decaySamples,
+                                           v->sustain, v->releaseSamples);
+          v->currentEnvelope = envelope;
+
+          // --- Voice mix (optional bus protection is applied below) ---
+          double sample = wf * envelope * v->volume;
+          if (v->spatial) {
+            if(mono){*mono=(float)sample;*sendOut=send;}else{
+            float spatialL, spatialR;
+            synth_spatial_process(&v->spatialState, (float)sample, &spatialL, &spatialR);
+            (*mixL) += spatialL*(1-send); (*mixR) += spatialR*(1-send);(*selectedL)+=spatialL*send;(*selectedR)+=spatialR*send;
+            }
+          } else {
+            (*mixL) += sample * v->leftGain*(1-send);
+            (*mixR) += sample * v->rightGain*(1-send);(*selectedL)+=sample*v->leftGain*send;(*selectedR)+=sample*v->rightGain*send;
+          }
+
+          // --- Advance phase ---
+          v->phase += effectivePhaseIncr;
+          v->phase -= floor(v->phase);
+          if (v->fmActive) {
+            v->fmModPhase += effectivePhaseIncr * v->fmRatio;
+            v->fmModPhase -= floor(v->fmModPhase);
+            if(!v->sequenceGeneration)v->fmDepth = ClampDouble(v->fmDepth + v->fmDepthDelta, 0.0, 10.0);
+          }
+
+          // --- Pitch sweep ---
+          if (!v->sequenceGeneration && v->phaseIncrDelta != 0.0) {
+            v->phaseIncrement += v->phaseIncrDelta;
+          }
+          if(!v->sequenceGeneration){v->noisePhaseIncrement += v->noisePhaseIncrDelta;
+          v->pulseWidth = ClampDouble(v->pulseWidth + v->pulseWidthDelta, 0.05, 0.95);}
+
+          // --- Pan sweep ---
+          if (!v->sequenceGeneration && v->panDelta != 0.0) {
+            v->pan = ClampDouble(v->pan + v->panDelta, -1.0, 1.0);
+            [module updatePanGainsForVoice:v];
+          }
+
+          // --- Advance sample counter ---
+          BOOL finished;
+          if(v->held.voiceId) {
+            if(v->samplesPlayed < v->attackSamples+v->decaySamples)v->samplesPlayed++;
+            finished=v->held.releasing && ++v->held.releasePlayed>=MAX(1,v->releaseSamples);
+            if(finished){v->samplesPlayed=v->totalSamples;synth_identity_set(&module->identities[i],0,0);}
+          } else finished=++v->samplesPlayed>=v->totalSamples;
+          if (finished) {
+            if (v->spatial) v->currentEnvelope = 0;
+            else { v->isActive = false; synth_stats_voice_end(&module->stats,false); }
+          }
+
+      };
+      void (^ __unsafe_unretained tailSample)(int,double,double,float *,double *,double *,double *,double *,double *) = ^(int i,double nowBeat,double nowMs,float *mono,double *sendOut,double *mixL,double *mixR,double *selectedL,double *selectedR) {
+#pragma unused(nowBeat,nowMs)
+
+
+          TailVoice *tail = &module->tails[i];
+          if (!tail->isActive) return;
+          double send=synth_send_tick(&tail->send);
+          if (tail->spatial && tail->samplesRemaining <= 0) {
+            if(mono){*mono=0;*sendOut=send;}else{
+            float l, r;
+            synth_spatial_process(&tail->spatialState, 0, &l, &r);
+            (*mixL) += l*(1-send); (*mixR) += r*(1-send);(*selectedL)+=l*send;(*selectedR)+=r*send;
+            }
+            if (--tail->spatialDrain <= 0) { tail->isActive = false; synth_stats_tail_end(&module->stats); }
+            return;
+          }
+          double wf = 0.0;
+          if (tail->waveType == 4) {
+            tail->noisePhase += tail->noisePhaseIncrement;
+            if (tail->noisePhase >= 1.0) {
+              tail->noisePhase -= floor(tail->noisePhase);
+              tail->heldNoise = LcgNoise(&tail->noiseState);
+            }
+            wf = tail->heldNoise;
+          } else if (tail->waveType == 5) {
+            wf = RenderWavetable(tail->phase, tail->wavetable, tail->wavetableSize);
+          } else if (tail->fmActive) {
+            wf = synth_fm_sine(tail->phase - floor(tail->phase), tail->fmModPhase, tail->fmDepth);
+          } else {
+            wf = RenderPeriodicWave(tail->waveType, tail->phase,
+                                    tail->phaseIncrement, tail->pulseWidth);
+          }
+          wf = QuantizeWave(wf, tail->bitDepth);
+          if (tail->filterAlpha > 0.0) {
+            tail->filterState += tail->filterAlpha * (wf - tail->filterState);
+            wf = tail->filterState;
+          }
+          wf = synth_filter_process(&tail->svf, wf);
+          int denominator = MAX(1, tail->totalSamples - 1);
+          double x = ClampDouble((double)(tail->samplesRemaining - 1)
+                                 / (double)denominator, 0.0, 1.0);
+          double tailEnvelope = SmoothStep01(x);
+          double sample = wf * tail->volume * tailEnvelope;
+          if (tail->spatial) {
+            if(mono){*mono=(float)sample;*sendOut=send;}else{
+            float spatialL, spatialR;
+            synth_spatial_process(&tail->spatialState, (float)sample, &spatialL, &spatialR);
+            (*mixL) += spatialL*(1-send); (*mixR) += spatialR*(1-send);(*selectedL)+=spatialL*send;(*selectedR)+=spatialR*send;
+            }
+          } else {
+            (*mixL) += sample * tail->leftGain*(1-send);
+            (*mixR) += sample * tail->rightGain*(1-send);(*selectedL)+=sample*tail->leftGain*send;(*selectedR)+=sample*tail->rightGain*send;
+          }
+          tail->phase += tail->phaseIncrement;
+          tail->phase -= floor(tail->phase);
+          if (tail->fmActive) {
+            tail->fmModPhase += tail->phaseIncrement * tail->fmRatio;
+            tail->fmModPhase -= floor(tail->fmModPhase);
+          }
+          tail->samplesRemaining--;
+          if (tail->samplesRemaining <= 0 && !tail->spatial) { tail->isActive = false; synth_stats_tail_end(&module->stats); }
+
+      };
+      enum { tileCapacity=16 };
+      for(AVAudioFrameCount frame=0;frame<frameCount;) {
+        if(module->sequence->activeMask)[module renderSequenceFrame];
+        double beats[tileCapacity],milliseconds[tileCapacity];
+        double dryL[tileCapacity]={0},dryR[tileCapacity]={0},wetL[tileCapacity]={0},wetR[tileCapacity]={0};
+        int count=0;
+        do {
+          beats[count]=module->sequence->beat;milliseconds[count]=module->sequence->milliseconds;
+          synth_transport_advance_sample(module->sequence);++count;
+          BOOL due=NO;
+          for(int slot=0;slot<module->sequence->capacity;slot++)if(module->sequence->activeMask&(1u<<slot)) {
+            SynthSequenceTransport *clockSlot=&module->sequence->slots[slot];
+            if(clockSlot->beat+1e-10>=clockSlot->nextBeat){due=YES;break;}
+          }
+          if(due)break;
+        }while(count<tileCapacity&&frame+count<frameCount);
+        if(module->stats.active>0)for(int i=0;i<module->engineMaxVoices;i++)if(module->voices[i].isActive) {
+          SynthVoice *v=&module->voices[i];
+          if(v->spatial) {
+            float mono[tileCapacity],left[tileCapacity],right[tileCapacity];double sends[tileCapacity];int n=0;
+            for(;n<count&&v->isActive;n++)voiceSample(i,beats[n],milliseconds[n],mono+n,sends+n,&dryL[n],&dryR[n],&wetL[n],&wetR[n]);
+            synth_spatial_process_block(&v->spatialState,mono,left,right,n);
+            for(int j=0;j<n;j++){double send=sends[j];dryL[j]+=left[j]*(1-send);dryR[j]+=right[j]*(1-send);wetL[j]+=left[j]*send;wetR[j]+=right[j]*send;}
+          }else for(int n=0;n<count&&v->isActive;n++)voiceSample(i,beats[n],milliseconds[n],NULL,NULL,&dryL[n],&dryR[n],&wetL[n],&wetR[n]);
+        }
+        if(module->stats.tails>0)for(int i=0;i<module->engineMaxVoices;i++)if(module->tails[i].isActive) {
+          TailVoice *v=&module->tails[i];
+          if(v->spatial) {
+            float mono[tileCapacity],left[tileCapacity],right[tileCapacity];double sends[tileCapacity];int n=0;
+            for(;n<count&&v->isActive;n++)tailSample(i,beats[n],milliseconds[n],mono+n,sends+n,&dryL[n],&dryR[n],&wetL[n],&wetR[n]);
+            synth_spatial_process_block(&v->spatialState,mono,left,right,n);
+            for(int j=0;j<n;j++){double send=sends[j];dryL[j]+=left[j]*(1-send);dryR[j]+=right[j]*(1-send);wetL[j]+=left[j]*send;wetR[j]+=right[j]*send;}
+          }else for(int n=0;n<count&&v->isActive;n++)tailSample(i,beats[n],milliseconds[n],NULL,NULL,&dryL[n],&dryR[n],&wetL[n],&wetR[n]);
+        }
+        for(int n=0;n<count;n++,frame++) {
+
+        if (mv != module->masterGainTarget) {
+          module->masterGainTarget = mv;
+          module->masterGainFramesRemaining = module->lookaheadSize;
+          module->masterGainStep = (module->masterGainTarget
+                                    - module->smoothedMasterGain)
+                                 / module->masterGainFramesRemaining;
+        }
+        if (module->masterGainFramesRemaining > 0) {
+          module->smoothedMasterGain += module->masterGainStep;
+          module->masterGainFramesRemaining--;
+          if (module->masterGainFramesRemaining == 0) {
+            module->smoothedMasterGain = module->masterGainTarget;
+            module->masterGainStep = 0.0;
+          }
+        }
+
+        double mixL=dryL[n],mixR=dryR[n],selectedL=wetL[n],selectedR=wetR[n];
+
+
+        // --- Stereo-linked lookahead peak limiter ---
+        int laIdx = module->lookaheadIdx;
+        double delayedL = module->lookaheadL[laIdx];
+        double delayedR = module->lookaheadR[laIdx];
+        double scaledL,scaledR;
+        if(bypassEffects) {
+          double processedL=selectedL*module->smoothedMasterGain,processedR=selectedR*module->smoothedMasterGain;
+          scaledL=processedL+mixL*module->smoothedMasterGain;scaledR=processedR+mixR*module->smoothedMasterGain;
+        } else synth_effects_process_routed(&module->effects,module->sequence->bpm,mixL,mixR,selectedL,selectedR,module->smoothedMasterGain,&scaledL,&scaledR);
+
+        module->lookaheadL[laIdx] = scaledL;
+        module->lookaheadR[laIdx] = scaledR;
+        module->lookaheadIdx = (laIdx + 1) % module->lookaheadSize;
+
+        // Maintain the maximum of the complete future window in amortized O(1).
+        int peakCapacity = module->lookaheadSize + 1;
+        int64_t oldestIndex = module->limiterSampleIndex - module->lookaheadSize;
+        while (module->lookaheadPeakCount > 0
+               && module->lookaheadPeakIndices[module->lookaheadPeakHead]
+                    < oldestIndex) {
+          module->lookaheadPeakHead = (module->lookaheadPeakHead + 1) % peakCapacity;
+          module->lookaheadPeakCount--;
+        }
+
+        if(measure) synth_stats_pre_limiter(&module->stats,scaledL,scaledR);
+        double currentPeak = fmax(fabs(scaledL), fabs(scaledR));
+        while (module->lookaheadPeakCount > 0) {
+          int last = (module->lookaheadPeakHead
+                      + module->lookaheadPeakCount - 1) % peakCapacity;
+          if (module->lookaheadPeaks[last] > currentPeak) break;
+          module->lookaheadPeakCount--;
+        }
+        int insert = (module->lookaheadPeakHead
+                      + module->lookaheadPeakCount) % peakCapacity;
+        module->lookaheadPeaks[insert] = currentPeak;
+        module->lookaheadPeakIndices[insert] = module->limiterSampleIndex;
+        module->lookaheadPeakCount++;
+        module->limiterSampleIndex++;
+
+        // A shared window gain preserves waveform shape instead of flattening
+        // individual peaks with a sample-by-sample safety gain.
+        double windowPeak = module->lookaheadPeaks[module->lookaheadPeakHead];
+
+        double outputCeiling = module->mixingProfile == MIXING_PROFILE_SPEAKER_SAFE
+                             ? SPEAKER_SAFE_OUTPUT_CEILING : OUTPUT_CEILING;
+        double targetGain = windowPeak > outputCeiling
+                          ? outputCeiling / windowPeak : 1.0;
+
+        // A new maximum enters at the far end of the lookahead buffer. Ramp
+        // toward its required gain over that deadline instead of introducing
+        // an instantaneous gain discontinuity. Do not slow an attack already
+        // in flight because an earlier peak can have a nearer deadline.
+        if (targetGain < module->smoothedGain) {
+          module->limiterAttackTarget = fmin(
+              module->limiterAttackTarget, targetGain);
+          double requiredStep = (module->limiterAttackTarget
+                                 - module->smoothedGain)
+                              / module->lookaheadSize;
+          module->limiterAttackStep = fmin(
+              module->limiterAttackStep, requiredStep);
+        }
+
+        if (module->limiterAttackStep < 0.0
+            && module->smoothedGain > module->limiterAttackTarget) {
+          module->smoothedGain = fmax(
+              module->limiterAttackTarget,
+              module->smoothedGain + module->limiterAttackStep);
+        } else {
+          module->limiterAttackTarget = 1.0;
+          module->limiterAttackStep = 0.0;
+          module->smoothedGain = fmin(
+              targetGain,
+              module->smoothedGain
+                  + (1.0 - module->smoothedGain) * module->gainReleaseCoeff);
+        }
+
+        // A fully drained lookahead window has no remaining waveform to protect.
+        // Reset only dynamic bus gain so the next unrelated sound starts at its
+        // intended level without truncating a release tail or creating a click.
+        BOOL drainedWindow = currentPeak <= 1.0e-12
+            && windowPeak <= 1.0e-12
+            && fabs(delayedL) <= 1.0e-12
+            && fabs(delayedR) <= 1.0e-12;
+        if (drainedWindow) {
+          module->smoothedGain = 1.0;
+          module->limiterAttackTarget = 1.0;
+          module->limiterAttackStep = 0.0;
+          module->lookaheadPeakHead = 0;
+          module->lookaheadPeakCount = 0;
+        }
+        double finalL = delayedL * module->smoothedGain;
+        double finalR = delayedR * module->smoothedGain;
+
+        float fL = (float)ClampDouble(finalL, -1.0, 1.0);
+        float fR = (float)ClampDouble(finalR, -1.0, 1.0);
+        if(measure) synth_stats_sample(&module->stats,fL,fR,module->smoothedGain,(int)module->engineSampleRate);
+
+        if (outR != NULL) {
+          outL[frame] = fL;
+          outR[frame] = fR;
+        } else if (isInterleaved) {
+          outL[frame * 2]     = fL;
+          outL[frame * 2 + 1] = fR;
+        } else {
+          outL[frame] = fL;
+        }
+              }
+      }
+      }
+
 
       for(int slot=0;slot<module->sequence->capacity;slot++)if(__atomic_load_n(&module->sequence->status[slot],__ATOMIC_ACQUIRE)==2)synth_sequence_publish_state(&module->sequence->slots[slot]);
       double seconds = measure ? (mach_absolute_time()-statsBegin) * (double)module->statsTimebase.numer / module->statsTimebase.denom * 1e-9 : 0;
